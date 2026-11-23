@@ -1,7 +1,7 @@
 # bad-timer
 
 A keyboard-driven workday timer, currently at the terminal-foundation stage.
-**Interactive activity tracking, storage, and CSV export are not implemented.**
+**Interactive activity tracking, transition persistence, and CSV export are not implemented.**
 An isolated in-memory timer state module is implemented and tested; it is not yet
 connected to the terminal. An isolated macOS time-zone helper is also implemented
 and tested. JSON config is loaded and validated at startup; daily totals and
@@ -32,7 +32,7 @@ python3 tests/terminal_smoke.py
 
 The screen shows terminal dimensions and the last input byte. Press any key to
 exercise immediate input; `q` or Ctrl-C quits. Resize redraws the screen. There
-is no timer yet. Input is byte-based; escape sequences and Unicode decoding
+is no timer yet; history is loaded and locked at startup. Input is byte-based; escape sequences and Unicode decoding
 will be added only as required by later approved UI work.
 
 Uses macOS libc and CoreFoundation APIs via Zig's build-time C translation, with no third-party
@@ -113,16 +113,44 @@ individual records; only replay checks them against preceding transitions.
 
 Tests cover round trips, escaped/Unicode names, ownership, atomic switches,
 unfinished sessions, backwards wall clocks, corruption, and invalid transitions.
-This is not durable storage: there are no history files, locks, writes, recovery
-prompts, or TUI integration yet. Replay currently retains the entire history in
+The codec itself performs no I/O. The storage loader below uses it at startup;
+transition writes and recovery prompts are not implemented. Replay currently retains the entire history in
 memory; it does not stream or impose a file-size limit.
+
+## History file loading
+
+The default history path is `$HOME/Library/Application Support/bad-timer/history.jsonl`.
+Use `--history PATH` to override it (relative paths use the working directory).
+Flags may appear in either order; duplicate, empty, or missing values are rejected.
+Example: `zig build run -- --config ./activities.json --history ./history.jsonl`.
+The parent directory must already exist, including for overrides. No directories
+are created automatically. A missing file is created with mode `0600` (subject
+to umask); existing permissions and contents are unchanged.
+
+After config validation and before terminal setup, `src/storage.zig` opens the
+file without truncation, takes a nonblocking exclusive advisory lock, and replays
+all records. The lock lasts until exit; another cooperating process using the
+same file is rejected. Do not replace/delete a locked file or edit it while the
+app runs: locks protect the open file, not its pathname, and unrelated tools
+can ignore advisory locks. Local macOS filesystems are the intended target.
+
+Corrupt or incomplete input aborts startup with its path and reason, without
+repair, truncation, or skipped records. Preserve the file for future recovery.
+Unfinished sessions are retained in memory but not resumed or resolved. No
+transitions are written yet, so timer controls remain disabled. Loading retains
+the entire history in memory without a size limit. `Store.deinit` releases both
+the owned history and file lock; do not copy the owning store.
+
+Tests cover creation, lock release, replay across reopen, completed/unfinished
+sessions, process exclusion, restrictive creation permissions, access errors,
+and preservation of corrupt bytes and terminal settings.
 
 ## Configuration
 
 The executable reads `$HOME/Library/Application Support/bad-timer/config.json`
 by default. Use `--config PATH` to load a different file; relative paths resolve
-from the working directory. An override does not require `HOME`, and a failed
-override never falls back to the default. Repeat flags, unknown arguments, and
+from the working directory. Each override bypasses `HOME` for that path and never falls back on failure.
+Supply both `--config PATH` and `--history PATH` to run without `HOME`. Repeat flags, unknown arguments, and
 missing or empty paths are rejected with usage guidance.
 
 The file is read once at startup, after checking the terminal but before changing

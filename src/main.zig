@@ -14,7 +14,7 @@ pub fn main(init: std.process.Init) void {
     run(init) catch |err| {
         std.debug.print("bad_timer: {s}\n", .{@errorName(err)});
         if (err == error.InvalidArguments)
-            std.debug.print("usage: bad_timer [--config PATH]\n", .{});
+            std.debug.print("usage: bad_timer [--config PATH] [--history PATH]\n", .{});
         std.process.exit(1);
     };
 }
@@ -32,25 +32,41 @@ fn output(text: []const u8) !void {
     }
 }
 
-fn configPath(init: std.process.Init) ![]u8 {
+const Paths = struct {
+    config: []u8,
+    history: []u8,
+};
+
+fn paths(init: std.process.Init) !Paths {
     var args = init.minimal.args.iterate();
     _ = args.skip();
-    if (args.next()) |flag| {
-        if (!std.mem.eql(u8, flag, "--config")) return error.InvalidArguments;
+    var config: ?[]const u8 = null;
+    var history: ?[]const u8 = null;
+    while (args.next()) |flag| {
+        const target = if (std.mem.eql(u8, flag, "--config")) &config else if (std.mem.eql(u8, flag, "--history")) &history else return error.InvalidArguments;
+        if (target.* != null) return error.InvalidArguments;
         const path = args.next() orelse return error.InvalidArguments;
-        if (path.len == 0 or std.mem.startsWith(u8, path, "--") or args.next() != null)
-            return error.InvalidArguments;
-        return init.gpa.dupe(u8, path);
+        if (path.len == 0 or std.mem.startsWith(u8, path, "--")) return error.InvalidArguments;
+        target.* = path;
     }
+    const config_path = try resolvePath(init.gpa, config, "config.json");
+    errdefer init.gpa.free(config_path);
+    return .{ .config = config_path, .history = try resolvePath(init.gpa, history, "history.jsonl") };
+}
+
+fn resolvePath(allocator: std.mem.Allocator, override: ?[]const u8, filename: []const u8) ![]u8 {
+    if (override) |path| return allocator.dupe(u8, path);
     const home = c.getenv("HOME") orelse return error.MissingHomeDirectory;
     if (!std.fs.path.isAbsolute(std.mem.span(home))) return error.InvalidHomeDirectory;
-    return std.fs.path.join(init.gpa, &.{ std.mem.span(home), "Library/Application Support/bad-timer/config.json" });
+    return std.fs.path.join(allocator, &.{ std.mem.span(home), "Library/Application Support/bad-timer", filename });
 }
 
 fn run(init: std.process.Init) !void {
     const allocator = init.gpa;
-    const config_path = try configPath(init);
-    defer allocator.free(config_path);
+    const locations = try paths(init);
+    defer allocator.free(locations.config);
+    defer allocator.free(locations.history);
+    const config_path = locations.config;
     if (builtin.os.tag != .macos) return error.RequiresMacOS;
     if (c.isatty(c.STDIN_FILENO) != 1 or c.isatty(c.STDOUT_FILENO) != 1)
         return error.RequiresInteractiveTTY;
@@ -62,6 +78,12 @@ fn run(init: std.process.Init) !void {
         return error.ConfigLoadFailed;
     };
     defer config.deinit();
+
+    var store = @import("bad_timer").storage.Store.open(allocator, init.io, locations.history) catch |err| {
+        std.debug.print("bad_timer: cannot load history at {s}: {s}; ensure its parent directory exists and no other timer is using it; preserve corrupt files for recovery\n", .{ locations.history, @errorName(err) });
+        return error.HistoryLoadFailed;
+    };
+    defer store.deinit(init.io);
 
     var original: c.struct_termios = undefined;
     if (c.tcgetattr(c.STDIN_FILENO, &original) != 0) return error.TerminalSetupFailed;
@@ -132,6 +154,6 @@ fn draw(key: ?u8) !void {
     var size: c.struct_winsize = std.mem.zeroes(c.struct_winsize);
     if (c.ioctl(c.STDOUT_FILENO, c.TIOCGWINSZ, &size) != 0) return error.TerminalSizeFailed;
     var buffer: [256]u8 = undefined;
-    const text = try std.fmt.bufPrint(&buffer, "\x1b[H\x1b[2Jbad-timer foundation\r\n{d} columns x {d} rows\r\nLast key byte: {d}\r\nq: quit | Ctrl-C: quit\r\nNo timer or storage yet.\r\n", .{ size.ws_col, size.ws_row, key orelse 0 });
+    const text = try std.fmt.bufPrint(&buffer, "\x1b[H\x1b[2Jbad-timer foundation\r\n{d} columns x {d} rows\r\nLast key byte: {d}\r\nq: quit | Ctrl-C: quit\r\nHistory loaded; no timer controls yet.\r\n", .{ size.ws_col, size.ws_row, key orelse 0 });
     try output(text);
 }

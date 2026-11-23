@@ -4,10 +4,12 @@ pub const time_zone = @import("time_zone.zig");
 pub const config = @import("config.zig");
 pub const clock = @import("clock.zig");
 pub const history = @import("history.zig");
+pub const storage = @import("storage.zig");
 
 test {
     _ = time_zone;
     _ = config;
+    _ = storage;
     _ = clock;
     _ = history;
 }

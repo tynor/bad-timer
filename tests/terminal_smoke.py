@@ -58,9 +58,9 @@ override.write_bytes(VALID_CONFIG)
 without_home = dict(ENV)
 without_home.pop("HOME", None)
 for path in (str(override), os.path.relpath(override)):
-    process, master, slave, original = launch(args=("--config", path), env=without_home)
+    process, master, slave, original = launch(args=("--config", path, "--history", str(override) + ".jsonl"), env=without_home)
     try:
-        receive(master, b"No timer or storage yet.")
+        receive(master, b"History loaded; no timer controls yet.")
         os.write(master, b"q")
         receive(master, b"\x1b[?25h\x1b[?1049l")
         assert process.wait(timeout=5) == 0, process.stderr.read()
@@ -76,6 +76,9 @@ for args, expected in (
     (("--config",), b"usage:"),
     (("--config", ""), b"usage:"),
     (("--unknown",), b"usage:"),
+    (("--history",), b"usage:"),
+    (("--history", ""), b"usage:"),
+    (("--history", "a", "--history", "b"), b"usage:"),
     (("--config", str(override), "--config", str(override)), b"usage:"),
     (("--config", "--config"), b"usage:"),
     (("--config", str(override) + ".missing"), b"FileNotFound"),
@@ -133,11 +136,57 @@ for contents, mode, expected in (
             process.wait(timeout=5)
 CONFIG.write_bytes(VALID_CONFIG)
 
+# History failures preserve bytes and terminal state; locks exclude other processes.
+history = Path(HOME.name) / "custom history.jsonl"
+for contents, mode, expected in (
+    (b"{", 0o600, b"IncompleteTrailingRecord"),
+    (b"{}\n", 0o600, b"cannot load history"),
+    (b"", 0o000, b"AccessDenied"),
+):
+    history.write_bytes(contents)
+    history.chmod(mode)
+    process, master, slave, original = launch(args=("--history", str(history)))
+    try:
+        assert process.wait(timeout=5) == 1
+        diagnostic = process.stderr.read()
+        assert expected in diagnostic and str(history).encode() in diagnostic, diagnostic
+        assert termios.tcgetattr(master) == original
+        history.chmod(0o600)
+        assert history.read_bytes() == contents
+    finally:
+        history.chmod(0o600)
+        os.close(master)
+        os.close(slave)
+history.unlink()
+for iteration in range(2):
+    process, master, slave, original = launch(args=("--history", str(history)))
+    try:
+        receive(master, b"History loaded;")
+        assert history.read_bytes() == b""
+        assert history.stat().st_mode & 0o777 == 0o600
+        second, m2, s2, original2 = launch(args=("--history", str(history)))
+        try:
+            assert second.wait(timeout=5) == 1
+            assert b"HistoryLocked" in second.stderr.read()
+            assert termios.tcgetattr(m2) == original2
+        finally:
+            os.close(m2)
+            os.close(s2)
+        os.write(master, b"q")
+        receive(master, b"\x1b[?25h\x1b[?1049l")
+        assert process.wait(timeout=5) == 0, process.stderr.read()
+    finally:
+        os.close(master)
+        os.close(slave)
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
 for exit_key in (b"q", b"\x03", signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
     print("checking", repr(exit_key), flush=True)
     process, master, slave, original = launch()
     try:
-        receive(master, b"No timer or storage yet.")
+        receive(master, b"History loaded; no timer controls yet.")
         assert not select.select([master], [], [], 1.2)[0], "idle redraw"
         os.write(master, b"x")
         receive(master, b"Last key byte: 120")
@@ -162,7 +211,7 @@ for exit_key in (b"q", b"\x03", signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
 out_master, out_slave = pty.openpty()
 process, master, slave, original = launch(out_slave)
 try:
-    receive(out_master, b"No timer or storage yet.")
+    receive(out_master, b"History loaded; no timer controls yet.")
     os.close(out_master)
     os.write(master, b"x")
     assert process.wait(timeout=5) == 1
