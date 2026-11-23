@@ -62,7 +62,12 @@ An isolated daily-totals calculator now groups completed/live measured durations
 stable ID for a configured-zone day, including removed activities. Positive UTC
 spans split proportionally with cumulative nanosecond rounding; zero/backward
 spans belong to the start date. Deterministic tests cover midnight, DST, renames,
-live sessions, and clock jumps. Daily totals are not yet shown in the TUI.
+live sessions, and clock jumps. The TUI now shows today's per-activity totals and
+configured zone, including live time and removed activities. It refreshes on live
+seconds, transitions, and configured-zone day changes, without idle redraws.
+Rendering clips to terminal rows with wrapping disabled and an enlargement hint;
+the activity menu still reaches every configured activity. PTY tests cover live
+updates, restart, removed activities, zone attribution, and small-screen resize.
 Real Ghostty and macOS suspend-clock validation are pending.
 Read `PLAN.md` for the approved MVP and defaults. Plan approval is not blanket
 implementation approval: propose each small implementation step and its acceptance

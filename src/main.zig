@@ -83,6 +83,8 @@ fn run(init: std.process.Init) !void {
         return error.ConfigLoadFailed;
     };
     defer config.deinit();
+    var zone = try timer.time_zone.Zone.init(config.timeZone());
+    defer zone.deinit();
 
     var store = @import("bad_timer").storage.Store.open(allocator, init.io, locations.history) catch |err| {
         std.debug.print("bad_timer: cannot load history at {s}: {s}; ensure its parent directory exists and no other timer is using it; preserve corrupt files for recovery\n", .{ locations.history, @errorName(err) });
@@ -135,6 +137,7 @@ fn run(init: std.process.Init) !void {
     var recovered_duration: u64 = 0;
     var live: timer.Timer = .{};
     var last_second: u64 = 0;
+    var last_day: ?i64 = null;
     var last_key: ?u8 = null;
     var menu: ?usize = null;
     var export_number: u64 = 1;
@@ -143,9 +146,13 @@ fn run(init: std.process.Init) !void {
     var dirty = true;
     while (!stopping.load(.monotonic)) {
         if (resized.swap(false, .monotonic)) dirty = true;
-        const second = (try live.elapsed(try timer.clock.now())) / std.time.ns_per_s;
-        if (second != last_second) dirty = true;
+        const now = try timer.clock.now();
+        const second = (try live.elapsed(now)) / std.time.ns_per_s;
+        const utc_seconds = std.math.cast(i64, @divFloor(now.utc_ns, std.time.ns_per_s)) orelse return error.TimestampOutOfRange;
+        const day = try zone.dayAt(utc_seconds);
+        if (second != last_second or last_day != day.start_utc_seconds) dirty = true;
         last_second = second;
+        last_day = day.start_utc_seconds;
         if (dirty) {
             if (if (live.running == null) store.history.unfinished else null) |session| {
                 var buffer: [768]u8 = undefined;
@@ -169,7 +176,9 @@ fn run(init: std.process.Init) !void {
             } else if (menu) |selected| {
                 try drawMenu(config, selected);
             } else {
-                try draw(last_key, config, live, second, status);
+                const totals = try timer.totals.calculate(allocator, zone, store.history.sessions.items, live, now);
+                defer allocator.free(totals);
+                try draw(last_key, config, live, second, status, totals);
             }
             dirty = false;
         }
@@ -390,25 +399,64 @@ fn activityName(name: []const u8) !void {
     }
 }
 
-fn draw(key: ?u8, config: Config, live: timer.Timer, seconds: u64, status: []const u8) !void {
+// Address rows explicitly and disable wrapping: names must never scroll controls away.
+const Screen = struct {
+    rows: usize,
+    row: usize = 0,
+    clipped: bool = false,
+
+    fn line(self: *Screen) !bool {
+        if (self.row >= self.rows) {
+            self.clipped = true;
+            return false;
+        }
+        self.row += 1;
+        var buffer: [40]u8 = undefined;
+        try output(try std.fmt.bufPrint(&buffer, "\x1b[{d};1H", .{self.row}));
+        return true;
+    }
+};
+
+fn draw(key: ?u8, config: Config, live: timer.Timer, seconds: u64, status: []const u8, totals: []const timer.totals.Total) !void {
     var size: c.struct_winsize = std.mem.zeroes(c.struct_winsize);
     if (c.ioctl(c.STDOUT_FILENO, c.TIOCGWINSZ, &size) != 0) return error.TerminalSizeFailed;
+    try output("\x1b[H\x1b[2J\x1b[?7l");
+    defer output("\x1b[?7h") catch {};
+    var screen = Screen{ .rows = @max(size.ws_row, 1) };
     var buffer: [256]u8 = undefined;
-    const text = try std.fmt.bufPrint(&buffer, "\x1b[H\x1b[2Jbad-timer\r\n{d} columns x {d} rows\r\nLast key byte: {d}\r\nq: save and quit | Ctrl-C: save and quit\r\nTimer controls ready.\r\nElapsed: {d} seconds\r\n", .{ size.ws_col, size.ws_row, key orelse 0, seconds });
-    try output(text);
-    try output(if (live.running != null) "Active: " else "Stopped");
-    if (live.running) |running| try activityName(running.activity.name);
-    try output("\r\n");
-    try output("a: activity menu | e: export completed sessions\r\n");
-    if (status.len != 0) {
-        try output(status);
-        try output("\r\n");
+    if (try screen.line()) try output("bad-timer");
+    if (try screen.line()) try output(try std.fmt.bufPrint(&buffer, "{d} columns x {d} rows", .{ size.ws_col, size.ws_row }));
+    if (try screen.line()) try output(try std.fmt.bufPrint(&buffer, "Last key byte: {d}", .{key orelse 0}));
+    if (try screen.line()) try output("q: save and quit | Ctrl-C: save and quit");
+    if (try screen.line()) try output("Timer controls ready.");
+    if (try screen.line()) try output(try std.fmt.bufPrint(&buffer, "Elapsed: {d} seconds", .{seconds}));
+    if (try screen.line()) {
+        try output(if (live.running != null) "Active: " else "Stopped");
+        if (live.running) |running| try activityName(running.activity.name);
+    }
+    if (try screen.line()) try output("a: activity menu | e: export completed sessions");
+    if (status.len != 0 and try screen.line()) try output(status);
+    if (try screen.line()) {
+        try output("Today's totals (");
+        try activityName(config.timeZone());
+        try output("): ");
+        if (totals.len == 0) try output("no time yet");
+    }
+    for (totals) |total| {
+        if (try screen.line()) {
+            try output(try std.fmt.bufPrint(&buffer, "{d} seconds: ", .{total.duration_ns / std.time.ns_per_s}));
+            try activityName(total.activity.name);
+        }
     }
     for (config.activities(), 0..) |activity, index| {
         if (config.numericKey(index)) |key_byte| {
-            try output(&.{ key_byte, ':', ' ' });
-            try activityName(activity.name);
-            try output("\r\n");
+            if (try screen.line()) {
+                try output(&.{ key_byte, ':', ' ' });
+                try activityName(activity.name);
+            }
         }
+    }
+    if (screen.clipped) {
+        try output(try std.fmt.bufPrint(&buffer, "\x1b[{d};1H\x1b[2KMore rows: enlarge terminal (a: menu)", .{screen.rows}));
     }
 }

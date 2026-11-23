@@ -8,7 +8,10 @@ Press `a` for a scrolling menu of all activities, including those beyond nine.
 Up/Down moves, Enter selects (with the same start/stop/switch behavior), and
 Escape cancels without changing timing. Tracking continues while the menu is open.
 Press `e` outside the menu to export completed sessions as CSV (details below).
-**Daily totals have an isolated calculator but are not yet shown in the TUI.**
+Today's per-activity totals include completed and running time in the configured
+zone, shown in whole seconds. Removed activities remain visible under their recorded
+names. Small screens clip rows without scrolling; enlarge the terminal to see more
+(the `a` menu still reaches every configured activity).
 See `PLAN.md` for approved scope and the per-step review gate.
 
 ## Build and run
@@ -97,7 +100,7 @@ Tests cover UTC, pre-epoch time, local midnight, independent zones, invalid inpu
 and Los Angeles's 23-hour/25-hour days in 2024. Rules come from the installed
 macOS time-zone database and may change with OS updates.
 
-## Daily totals calculator (not yet displayed)
+## Daily totals
 
 `src/totals.zig` exposes `calculate(allocator, zone, sessions, live, now)` for the
 local day containing `now`. It combines completed sessions and live monotonic
@@ -115,7 +118,10 @@ to the start date. This is an attribution policy, not a reconstruction of when a
 wall-clock adjustment occurred; history contains only endpoint readings. Neither
 stored durations nor history bytes are changed. Tests cover midnight, fractional
 pre-epoch times, 23/25-hour days, renames/removal, live time, empty input, clock
-jumps, and timestamp extremes. TUI integration remains a separate step.
+jumps, and timestamp extremes. The TUI shows the configured zone and these totals,
+refreshing on live elapsed seconds, transitions, and local-day changes. Stopped,
+unchanged screens do not redraw each second. PTY checks cover live updates,
+restart, removed activities, configured-zone attribution, and small-screen resize.
 
 ## CSV encoding and file publishing
 

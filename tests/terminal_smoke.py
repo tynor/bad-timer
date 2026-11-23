@@ -1,5 +1,7 @@
 """macOS PTY checks; run after zig build: python3 tests/terminal_smoke.py."""
 import csv
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import errno
 import json
 import resource
@@ -57,6 +59,52 @@ def launch(output=None, args=(), env=ENV, file_size_limit=None, cwd=None):
     )
     return process, master, slave, original
 
+
+# Configured-zone totals include removed activities, exclude yesterday, and survive restart.
+with tempfile.TemporaryDirectory(prefix="bad-timer-totals-") as directory:
+    history = Path(directory) / "history.jsonl"
+    config = Path(directory) / "config.json"
+    zone = ZoneInfo("Pacific/Kiritimati")
+    midnight = datetime.now(zone).replace(hour=0, minute=0, second=0, microsecond=0)
+    config.write_text(json.dumps({"time_zone": zone.key, "activities": [{"id": "work", "name": "Work"}]}))
+    events = []
+    for session_id, date, name in ((1, midnight, "Removed"), (2, midnight - timedelta(days=1), "Yesterday")):
+        activity = {"id": name.lower(), "name": name}
+        start_ns = int(date.timestamp()) * 1_000_000_000
+        events.extend([
+            {"version": 1, "change": {"start": {"session_id": session_id, "activity": activity, "start_utc_ns": start_ns}}},
+            {"version": 1, "change": {"stop": {"session_id": session_id, "activity": activity, "end_utc_ns": start_ns, "duration_ns": 7_000_000_000}}},
+        ])
+    history.write_text("".join(json.dumps(event) + "\n" for event in events))
+    for restart in (False, True):
+        process, master, slave, original = launch(args=("--config", str(config), "--history", str(history)))
+        try:
+            screen = receive(master, b"1: Work")
+            assert b"Today's totals (Pacific/Kiritimati)" in screen
+            assert b"7 seconds: Removed" in screen and b"Yesterday" not in screen
+            if not restart:
+                before = history.read_bytes()
+                os.write(master, b"1")
+                receive(master, b"1 seconds: Work")
+                os.write(master, b"1")
+                receive(master, b"Stopped")
+                assert history.read_bytes().startswith(before)
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 3, 20, 0, 0))
+                process.send_signal(signal.SIGWINCH)
+                receive(master, b"More rows: enlarge terminal")
+                assert process.poll() is None
+            else:
+                assert b"seconds: Work" in screen
+            os.write(master, b"q")
+            receive(master, b"\x1b[?25h\x1b[?1049l")
+            assert process.wait(timeout=5) == 0, process.stderr.read()
+            assert termios.tcgetattr(master) == original
+        finally:
+            os.close(master)
+            os.close(slave)
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
 
 # Export skips existing destinations, excludes live time, and never changes history.
 with tempfile.TemporaryDirectory(prefix="bad-timer-export-") as directory:
@@ -383,7 +431,7 @@ for exit_key in (b"q", b"\x03", signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
     print("checking", repr(exit_key), flush=True)
     process, master, slave, original = launch()
     try:
-        receive(master, b"1: Work\r\n")
+        receive(master, b"\x1b[?7h")
         assert not select.select([master], [], [], 1.2)[0], "idle redraw"
         os.write(master, b"x")
         receive(master, b"Last key byte: 120")
@@ -485,6 +533,9 @@ try:
         screen = receive(master, f"> {i}: Activity {i}".encode())
     assert b"  1: Activity 1\r\n" not in screen, "menu did not scroll"
     os.write(master, b"\r")
+    receive(master, b"More rows: enlarge terminal")
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+    os.kill(process.pid, signal.SIGWINCH)
     receive(master, b"Active: Activity 10")
     os.write(master, b"a")
     receive(master, b"> 1: Activity 1")
@@ -533,9 +584,10 @@ finally:
 
 # A disconnected output terminal must unwind raw mode on the input terminal.
 out_master, out_slave = pty.openpty()
+fcntl.ioctl(out_slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
 process, master, slave, original = launch(out_slave)
 try:
-    receive(out_master, b"Timer controls ready.")
+    receive(out_master, b"\x1b[?7h")
     os.close(out_master)
     os.write(master, b"x")
     assert process.wait(timeout=5) == 1
