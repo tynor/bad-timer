@@ -68,7 +68,11 @@ seconds, transitions, and configured-zone day changes, without idle redraws.
 Rendering clips to terminal rows with wrapping disabled and an enlargement hint;
 the activity menu still reaches every configured activity. PTY tests cover live
 updates, restart, removed activities, zone attribution, and small-screen resize.
-Real Ghostty and macOS suspend-clock validation are pending.
+A repeatable `tests/resource_check.py` now checks ReleaseSmall binary size,
+short-session history growth, and unchanged history content/mtime during stopped
+and running no-input windows. CPU/RSS checks were skipped at user request after
+sandbox denial of `ps`; their provisional targets remain unverified. Measurements
+and method are in README.md. Real Ghostty and macOS suspend-clock validation are pending.
 Read `PLAN.md` for the approved MVP and defaults. Plan approval is not blanket
 implementation approval: propose each small implementation step and its acceptance
 checks, obtain explicit approval, implement only that step, then stop for review.
@@ -83,6 +87,7 @@ The approved requirements are not existing behavior.
 - `src/duration_cases.json`, `tests/duration_oracle.go`: Go-generated duration compatibility fixtures.
 - `src/terminal.h`: system headers for build-time Zig C translation.
 - `tests/terminal_smoke.py`: macOS PTY integration checks.
+- `tests/resource_check.py`: macOS PTY size/history checks; no CPU/RSS inspection.
 - `README.md`: foundation usage, verification, and known limits.
 - `src/root.zig`: in-memory timer state, borrowed activity identity, and deterministic tests.
 - `src/totals.zig`: isolated configured-zone daily attribution, stable-ID grouping, and tests.
@@ -109,6 +114,8 @@ zig build test
 zig fmt --check build.zig src
 zig build -Doptimize=ReleaseSmall
 python3 tests/terminal_smoke.py
+# After the ReleaseSmall build:
+python3 tests/resource_check.py
 ```
 
 Baseline verified with Zig `0.17.1`: `zig build`, `zig build test`,

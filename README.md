@@ -52,6 +52,43 @@ unwind the screen and restore termios. Ctrl-Z suspension is disabled while the
 screen is active. SIGKILL, crashes, or terminal disconnection cannot guarantee
 screen cleanup; use `stty sane` and `reset` if necessary.
 
+## Resource checks
+
+Run from the repository root (Python 3, with assertions enabled):
+
+```sh
+zig build -Doptimize=ReleaseSmall
+python3 tests/resource_check.py
+```
+
+The script uses a private temporary config/history and a 24×80 macOS PTY, not
+Ghostty. It reports the executable's on-disk size and history growth through
+start → switch → stop → export → quit. It checks history contents and modification
+time across four five-second no-input windows: initially stopped, each running
+activity, and stopped again. It drains terminal output during those windows and
+checks two exported sessions, transition records, clean exit, and termios cleanup.
+This observes unchanged history, not an OS-level trace of every disk write.
+Temporary files are removed; real user history is not accessed.
+
+Measured on Apple M1 Max (arm64), macOS 27.2.1, Zig 0.17.1, ReleaseSmall:
+
+| Measurement | Result |
+| --- | ---: |
+| Executable size | 261,352 bytes |
+| Empty history | 0 bytes |
+| After start | 124 bytes |
+| After switch | 391 bytes |
+| After stop (two completed sessions) | 539 bytes |
+| History content/mtime changes during no-input windows | None |
+| History changes from export and stopped quit | None |
+
+History byte counts vary with timestamp/duration digit lengths and activity names.
+CPU and RSS measurements were **skipped at user request** after sandbox denial of
+`ps`; the provisional <1% CPU and <20 MiB RSS targets remain unverified. This
+script does not use `ps` or substitute another process-inspection mechanism.
+Real Ghostty, suspend-clock behavior, and long-history resource scaling remain
+unverified; these short, empty-history measurements are not a release certification.
+
 ## Verification
 
 The Python smoke test uses macOS pseudo-terminals to check input, resize, no
