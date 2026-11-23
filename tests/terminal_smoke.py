@@ -199,7 +199,7 @@ for action in (b"q", b"\x03", signal.SIGTERM, b"d", "write_failure"):
         file_size_limit=len(start) if action == "write_failure" else None,
     )
     try:
-        receive(master, b"Supplying an end time is not supported yet.")
+        receive(master, b"q / Ctrl-C: exit without changing history")
         os.write(master, b"1a\r")  # Unrelated keys cannot resolve recovery.
         receive(master, b"Unfinished session 7")
         assert history.read_bytes() == start
@@ -242,6 +242,65 @@ for action in (b"q", b"\x03", signal.SIGTERM, b"d", "write_failure"):
         os.write(master, b"q")
         receive(master, b"\x1b[?25h\x1b[?1049l")
         assert process.wait(timeout=5) == 0, process.stderr.read()
+        assert termios.tcgetattr(master) == original
+    finally:
+        os.close(master)
+        os.close(slave)
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+# Supplied end times require validation and a separate durable confirmation.
+for action in ("save", "cancel", "quit", "interrupt", "failure"):
+    history.write_bytes(start)
+    process, master, slave, original = launch(
+        args=("--history", str(history)),
+        file_size_limit=len(start) if action == "failure" else None,
+    )
+    try:
+        receive(master, b"t: supply UTC end time")
+        os.write(master, b"t1969-12-31T23:59:59Z\r")
+        receive(master, b"Invalid end time")
+        assert history.read_bytes() == start
+        os.write(master, b"\x1bt1970-01-01T00:00:01Z\r")
+        receive(master, b"y: confirm and save")
+        assert history.read_bytes() == start
+        if action in ("save", "failure"):
+            os.write(master, b"y")
+            if action == "save":
+                receive(master, b"History loaded;")
+                saved = history.read_bytes()
+                assert saved.startswith(start)
+                stop = json.loads(saved[len(start):])["change"]["stop"]
+                assert stop == {"session_id": 7, "activity": {"id": "removed", "name": "Old name"},
+                                "end_utc_ns": 1000000000, "duration_ns": 999999900}
+                os.write(master, b"q")
+        elif action == "cancel":
+            os.write(master, b"\x1b")
+            receive(master, b"t: supply UTC end time")
+            os.write(master, b"q")
+        else:
+            os.write(master, b"q" if action == "quit" else b"\x03")
+        receive(master, b"\x1b[?25h\x1b[?1049l")
+        assert process.wait(timeout=5) == (1 if action == "failure" else 0)
+        if action == "failure":
+            diagnostic = process.stderr.read()
+            assert b"recovery failed" in diagnostic and b"disk may contain" in diagnostic
+        if action != "save":
+            assert history.read_bytes() == start
+        assert termios.tcgetattr(master) == original
+    finally:
+        os.close(master)
+        os.close(slave)
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+    process, master, slave, original = launch(args=("--history", str(history)))
+    try:
+        receive(master, b"History loaded;" if action == "save" else b"Unfinished session 7")
+        os.write(master, b"q")
+        receive(master, b"\x1b[?25h\x1b[?1049l")
+        assert process.wait(timeout=5) == 0
         assert termios.tcgetattr(master) == original
     finally:
         os.close(master)

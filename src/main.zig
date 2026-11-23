@@ -3,6 +3,10 @@ const builtin = @import("builtin");
 const c = @import("terminal_c");
 const Config = @import("bad_timer").config.Config;
 
+test {
+    _ = @import("recovery.zig");
+}
+
 var stopping = std.atomic.Value(bool).init(false);
 var resized = std.atomic.Value(bool).init(false);
 
@@ -120,14 +124,29 @@ fn run(init: std.process.Init) !void {
     defer output("\x1b[?25h\x1b[?1049l") catch {};
     try output("\x1b[?1049h\x1b[?25l");
 
+    var recovery_mode: enum { choice, entry, confirm } = .choice;
+    var end_input: [64]u8 = undefined;
+    var end_length: usize = 0;
+    var recovery_error = false;
+    var recovered_end: i128 = 0;
+    var recovered_duration: u64 = 0;
     var last_key: ?u8 = null;
     var dirty = true;
     while (!stopping.load(.monotonic)) {
         if (resized.swap(false, .monotonic)) dirty = true;
         if (dirty) {
             if (store.history.unfinished) |session| {
-                var buffer: [512]u8 = undefined;
-                try output(try std.fmt.bufPrint(&buffer, "\x1b[H\x1b[2JUnfinished session {d}\r\nNo time will be counted automatically.\r\nd: discard unfinished session (adds no time)\r\nq / Ctrl-C: exit without changing history\r\nSupplying an end time is not supported yet.\r\n", .{session.session_id}));
+                var buffer: [768]u8 = undefined;
+                try output(try std.fmt.bufPrint(&buffer, "\x1b[H\x1b[2JUnfinished session {d}\r\nNo time will be counted automatically.\r\nd: discard unfinished session (adds no time)\r\nt: supply UTC end time\r\nq / Ctrl-C: exit without changing history\r\n", .{session.session_id}));
+                switch (recovery_mode) {
+                    .choice => {},
+                    .entry => {
+                        try output("End UTC (YYYY-MM-DDTHH:MM:SSZ); Enter: review; Esc: cancel\r\n");
+                        try output(end_input[0..end_length]);
+                        if (recovery_error) try output("\r\nInvalid end time, before start, or duration exceeds range.\r\n");
+                    },
+                    .confirm => try output(try std.fmt.bufPrint(&buffer, "End UTC: {s}\r\nInferred duration: {d} seconds + {d} ns\r\nBased on wall-clock timestamps, not measured elapsed time.\r\ny: confirm and save; Esc: cancel\r\n", .{ end_input[0..end_length], recovered_duration / std.time.ns_per_s, recovered_duration % std.time.ns_per_s })),
+                }
             } else {
                 try draw(last_key);
             }
@@ -151,7 +170,43 @@ fn run(init: std.process.Init) !void {
         if (n == 0) return error.TerminalDisconnected;
         if (key == 'q') break;
         if (store.history.unfinished) |session| {
-            if (key == 'd') {
+            if (key == 27) {
+                recovery_mode = .choice;
+                end_length = 0;
+                recovery_error = false;
+            } else if (recovery_mode == .entry) {
+                if (key == '\r' or key == '\n') {
+                    if (@import("recovery.zig").endTime(end_input[0..end_length], session.start_utc_ns)) |result| {
+                        recovered_end = result.end_ns;
+                        recovered_duration = result.duration_ns;
+                        recovery_mode = .confirm;
+                    } else |_| {
+                        recovery_error = true;
+                    }
+                } else if (key == 127 or key == 8) {
+                    end_length -|= 1;
+                    recovery_error = false;
+                } else if (key >= 32 and key <= 126 and end_length < end_input.len) {
+                    end_input[end_length] = key;
+                    end_length += 1;
+                }
+            } else if (recovery_mode == .confirm) {
+                if (key == 'y') {
+                    store.append(init.io, .{ .version = 1, .change = .{ .stop = .{
+                        .session_id = session.session_id,
+                        .activity = session.activity,
+                        .end_utc_ns = recovered_end,
+                        .duration_ns = recovered_duration,
+                    } } }) catch |err| {
+                        std.debug.print("bad_timer: recovery failed at {s}: {s}; disk may contain part or all of the event; preserve the history file and restart to inspect it; do not retry in this process\n", .{ locations.history, @errorName(err) });
+                        return error.HistoryRecoveryFailed;
+                    };
+                }
+            } else if (key == 't') {
+                recovery_mode = .entry;
+                end_length = 0;
+                recovery_error = false;
+            } else if (key == 'd') {
                 store.append(init.io, .{ .version = 1, .change = .{ .discard = .{ .session_id = session.session_id } } }) catch |err| {
                     std.debug.print("bad_timer: discard failed at {s}: {s}; disk may contain part or all of the event; preserve the history file and restart to inspect it; do not retry in this process\n", .{ locations.history, @errorName(err) });
                     return error.HistoryDiscardFailed;

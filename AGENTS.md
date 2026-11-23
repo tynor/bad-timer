@@ -32,7 +32,10 @@ session without adding completed time, rewriting records, or permitting ID reuse
 Startup now prompts for an unfinished session: `d` durably discards it without
 adding time; `q` or interruption exits without changing history. Append failures
 exit with an uncertainty warning. Older binaries reject logs containing discard events.
-Recovery by supplying an end time, timer-control transition wiring,
+Startup recovery also accepts a strict whole-second UTC end time, shows its
+wall-clock-inferred duration, and requires confirmation before durably appending a
+stop using the historical activity identity. Invalid/before-start/out-of-range
+inputs and cancellation leave history unchanged. Timer-control transition wiring,
 full activity TUI, and CSV export are not implemented. Real Ghostty and macOS suspend-clock validation are pending.
 Read `PLAN.md` for the approved MVP and defaults. Plan approval is not blanket
 implementation approval: propose each small implementation step and its acceptance
@@ -43,7 +46,8 @@ The approved requirements are not existing behavior.
 
 - `build.zig`: builds the `bad_timer` executable and module; run/test steps.
 - `build.zig.zon`: package metadata; declares minimum Zig `0.17.1`; no dependencies.
-- `src/main.zig`: minimal terminal executable and signal/termios cleanup.
+- `src/main.zig`: minimal terminal executable, recovery prompt, and signal/termios cleanup.
+- `src/recovery.zig`: strict UTC recovery timestamp parsing and inferred-duration validation/tests.
 - `src/terminal.h`: system headers for build-time Zig C translation.
 - `tests/terminal_smoke.py`: macOS PTY integration checks.
 - `README.md`: foundation usage, verification, and known limits.

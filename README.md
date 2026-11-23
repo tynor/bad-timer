@@ -142,9 +142,17 @@ Corrupt or incomplete input aborts startup with its path and reason, without
 repair, truncation, or skipped records. Preserve the file for future recovery.
 An unfinished session opens a recovery prompt showing its session ID. Press `d`
 to explicitly discard it without adding completed time, or `q` / Ctrl-C to exit
-without changing history. Other keys do not resolve recovery. Discard is persisted
-and synced before the foundation screen appears; restarting then opens stopped.
-Supplying an end time is not supported yet. Timer controls remain disabled. Loading retains
+without changing history. Press `t` to enter an end time as `YYYY-MM-DDTHH:MM:SSZ`
+(explicit UTC, whole seconds, years 0001–9999). Backspace edits; Enter validates
+and shows the inferred duration; `y` confirms and saves. Escape cancels entry or
+confirmation without writing. End times before the start, invalid calendar dates,
+and durations exceeding the stored `u64` nanosecond range are rejected.
+Recovery infers duration from UTC timestamps, not a surviving monotonic reading;
+wall-clock changes during the interrupted session cannot be reconstructed. Review
+that estimate before confirming. Discard or confirmed stop is persisted and synced
+before the foundation screen appears; restarting then opens stopped. Both append
+without rewriting original records and use the historical activity name/ID.
+Timer controls remain disabled. Loading retains
 the entire history in memory without a size limit. `Store.deinit` releases both
 the owned history and file lock; do not copy the owning store.
 
@@ -171,8 +179,9 @@ injected partial-write/sync failures, blocked retries, and restart uncertainty.
 Tests also cover creation, lock release, replay across reopen, completed/unfinished
 sessions, process exclusion, restrictive creation permissions, access errors,
 and preservation of corrupt bytes and terminal settings. PTY checks cover recovery
-cancel/interruption, ignored keys, durable discard and restart, and a file-size-limit
-write failure with terminal cleanup.
+cancel/interruption, ignored keys, durable discard and confirmed end-time recovery,
+invalid end times, restart, and file-size-limit write failures with terminal cleanup.
+Deterministic recovery tests cover calendar validation, epoch conversion, and duration bounds.
 
 ## Configuration
 
