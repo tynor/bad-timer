@@ -5,8 +5,67 @@ fn leap(year: i64) bool {
     return @mod(year, 4) == 0 and (@mod(year, 100) != 0 or @mod(year, 400) == 0);
 }
 
+pub const Result = struct { end_ns: i128, duration_ns: u64 };
+
+/// Go time.ParseDuration semantics, with negative results rejected for recovery.
+pub fn duration(text: []const u8, start_ns: i128) !Result {
+    var s = text;
+    const negative = s.len > 0 and s[0] == '-';
+    if (s.len > 0 and (s[0] == '-' or s[0] == '+')) s = s[1..];
+    var total: u64 = 0;
+    if (std.mem.eql(u8, s, "0")) s = "" else if (s.len == 0) return error.InvalidDuration;
+    while (s.len > 0) {
+        var i: usize = 0;
+        var whole: u64 = 0;
+        const limit: u64 = 1 << 63;
+        while (i < s.len and std.ascii.isDigit(s[i])) : (i += 1) {
+            if (whole > limit / 10) return error.InvalidDuration;
+            whole = whole * 10 + s[i] - '0';
+            if (whole > limit) return error.InvalidDuration;
+        }
+        const pre = i > 0;
+        var fraction: u64 = 0;
+        var scale: f64 = 1;
+        var post = false;
+        if (i < s.len and s[i] == '.') {
+            i += 1;
+            var overflow = false;
+            while (i < s.len and std.ascii.isDigit(s[i])) : (i += 1) {
+                post = true;
+                if (overflow) continue;
+                if (fraction > (limit - 1) / 10) {
+                    overflow = true;
+                    continue;
+                }
+                const next = fraction * 10 + s[i] - '0';
+                if (next > limit) {
+                    overflow = true;
+                    continue;
+                }
+                fraction = next;
+                scale *= 10;
+            }
+        }
+        if (!pre and !post) return error.InvalidDuration;
+        const unit_start = i;
+        while (i < s.len and s[i] != '.' and !std.ascii.isDigit(s[i])) : (i += 1) {}
+        const name = s[unit_start..i];
+        const unit: u64 = if (std.mem.eql(u8, name, "ns")) 1 else if (std.mem.eql(u8, name, "us") or std.mem.eql(u8, name, "µs") or std.mem.eql(u8, name, "μs")) 1000 else if (std.mem.eql(u8, name, "ms")) 1000000 else if (std.mem.eql(u8, name, "s")) 1000000000 else if (std.mem.eql(u8, name, "m")) 60000000000 else if (std.mem.eql(u8, name, "h")) 3600000000000 else return error.InvalidDuration;
+        if (whole > limit / unit) return error.InvalidDuration;
+        var value = whole * unit;
+        // Match Go's float64 fraction conversion, including sub-nanosecond truncation.
+        if (fraction > 0) value += @intFromFloat(@as(f64, @floatFromInt(fraction)) * (@as(f64, @floatFromInt(unit)) / scale));
+        if (value > limit or total > limit - value) return error.InvalidDuration;
+        total += value;
+        s = s[i..];
+    }
+    if (negative and total != 0) return error.NegativeDuration;
+    if (total > std.math.maxInt(i64)) return error.InvalidDuration;
+    return .{ .end_ns = std.math.add(i128, start_ns, total) catch return error.DurationOutOfRange, .duration_ns = total };
+}
+
 /// Strict whole-second UTC ISO-8601, years 0001–9999.
-pub fn endTime(text: []const u8, start_ns: i128) !struct { end_ns: i128, duration_ns: u64 } {
+pub fn endTime(text: []const u8, start_ns: i128) !Result {
     if (text.len != 20) return error.InvalidTimestamp;
     for (text, 0..) |byte, i| {
         const separator: ?u8 = switch (i) {
@@ -35,9 +94,25 @@ pub fn endTime(text: []const u8, start_ns: i128) !struct { end_ns: i128, duratio
     for (months[0 .. month - 1]) |length| days += length;
     days += day - 1;
     const end_ns = @as(i128, days * 86400 + hour * 3600 + minute * 60 + second) * std.time.ns_per_s;
-    const duration = std.math.sub(i128, end_ns, start_ns) catch return error.DurationOutOfRange;
-    if (duration < 0) return error.EndBeforeStart;
-    return .{ .end_ns = end_ns, .duration_ns = std.math.cast(u64, duration) orelse return error.DurationOutOfRange };
+    const elapsed = std.math.sub(i128, end_ns, start_ns) catch return error.DurationOutOfRange;
+    if (elapsed < 0) return error.EndBeforeStart;
+    return .{ .end_ns = end_ns, .duration_ns = std.math.cast(u64, elapsed) orelse return error.DurationOutOfRange };
+}
+
+test "Go-generated duration compatibility cases" {
+    const Case = struct { text: []const u8, nanoseconds: ?u64 };
+    const cases = try std.json.parseFromSlice([]Case, std.testing.allocator, @embedFile("duration_cases.json"), .{});
+    defer cases.deinit();
+    for (cases.value) |case| {
+        const actual = duration(case.text, 100) catch {
+            try std.testing.expect(case.nanoseconds == null);
+            continue;
+        };
+        try std.testing.expect(case.nanoseconds != null);
+        try std.testing.expectEqual(case.nanoseconds.?, actual.duration_ns);
+        try std.testing.expectEqual(@as(i128, 100) + case.nanoseconds.?, actual.end_ns);
+    }
+    try std.testing.expectError(error.DurationOutOfRange, duration("1ns", std.math.maxInt(i128)));
 }
 
 test "strict UTC recovery and bounded inferred duration" {

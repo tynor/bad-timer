@@ -251,7 +251,7 @@ for action in (b"q", b"\x03", signal.SIGTERM, b"d", "write_failure"):
             process.wait(timeout=5)
 
 # Supplied end times require validation and a separate durable confirmation.
-for action in ("save", "cancel", "quit", "interrupt", "failure"):
+for action, duration_input in [(a, d) for d in (False, True) for a in ("save", "cancel", "quit", "interrupt", "failure")]:
     history.write_bytes(start)
     process, master, slave, original = launch(
         args=("--history", str(history)),
@@ -259,11 +259,17 @@ for action in ("save", "cancel", "quit", "interrupt", "failure"):
     )
     try:
         receive(master, b"t: supply UTC end time")
-        os.write(master, b"t1969-12-31T23:59:59Z\r")
-        receive(master, b"Invalid end time")
+        os.write(master, b"u-1s\r" if duration_input else b"t1969-12-31T23:59:59Z\r")
+        receive(master, b"Invalid duration" if duration_input else b"Invalid end time")
         assert history.read_bytes() == start
-        os.write(master, b"\x1bt1970-01-01T00:00:01Z\r")
-        receive(master, b"y: confirm and save")
+        if duration_input:
+            os.write(master, b"\x1bu" + b"0s" * 128 + b"1h\r")
+            receive(master, b"Esc: restart.")
+            assert history.read_bytes() == start
+        os.write(master, "\x1bu1µs2.5ms\r".encode() if duration_input else b"\x1bt1970-01-01T00:00:01Z\r")
+        review = receive(master, b"y: confirm and save")
+        if duration_input:
+            assert b"Derived end UTC (Unix nanoseconds): 2501100" in review
         assert history.read_bytes() == start
         if action in ("save", "failure"):
             os.write(master, b"y")
@@ -273,7 +279,8 @@ for action in ("save", "cancel", "quit", "interrupt", "failure"):
                 assert saved.startswith(start)
                 stop = json.loads(saved[len(start):])["change"]["stop"]
                 assert stop == {"session_id": 7, "activity": {"id": "removed", "name": "Old name"},
-                                "end_utc_ns": 1000000000, "duration_ns": 999999900}
+                                "end_utc_ns": 2501100 if duration_input else 1000000000,
+                                "duration_ns": 2501000 if duration_input else 999999900}
                 os.write(master, b"q")
         elif action == "cancel":
             os.write(master, b"\x1b")

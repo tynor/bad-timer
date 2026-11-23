@@ -35,7 +35,11 @@ exit with an uncertainty warning. Older binaries reject logs containing discard 
 Startup recovery also accepts a strict whole-second UTC end time, shows its
 wall-clock-inferred duration, and requires confirmation before durably appending a
 stop using the historical activity identity. Invalid/before-start/out-of-range
-inputs and cancellation leave history unchanged. Timer-control transition wiring,
+inputs and cancellation leave history unchanged. Recovery also accepts Go
+`time.ParseDuration` syntax through `u`, rejecting negative results and requiring
+confirmation of duration and derived UTC end before saving. Go-generated fixtures
+verify parsing compatibility; input is limited to 256 UTF-8 bytes.
+Timer-control transition wiring,
 full activity TUI, and CSV export are not implemented. Real Ghostty and macOS suspend-clock validation are pending.
 Read `PLAN.md` for the approved MVP and defaults. Plan approval is not blanket
 implementation approval: propose each small implementation step and its acceptance
@@ -47,7 +51,8 @@ The approved requirements are not existing behavior.
 - `build.zig`: builds the `bad_timer` executable and module; run/test steps.
 - `build.zig.zon`: package metadata; declares minimum Zig `0.17.1`; no dependencies.
 - `src/main.zig`: minimal terminal executable, recovery prompt, and signal/termios cleanup.
-- `src/recovery.zig`: strict UTC recovery timestamp parsing and inferred-duration validation/tests.
+- `src/recovery.zig`: strict UTC timestamp and Go-style duration recovery parsing/tests.
+- `src/duration_cases.json`, `tests/duration_oracle.go`: Go-generated duration compatibility fixtures.
 - `src/terminal.h`: system headers for build-time Zig C translation.
 - `tests/terminal_smoke.py`: macOS PTY integration checks.
 - `README.md`: foundation usage, verification, and known limits.

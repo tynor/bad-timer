@@ -125,8 +125,10 @@ fn run(init: std.process.Init) !void {
     try output("\x1b[?1049h\x1b[?25l");
 
     var recovery_mode: enum { choice, entry, confirm } = .choice;
-    var end_input: [64]u8 = undefined;
+    var duration_entry = false;
+    var end_input: [256]u8 = undefined;
     var end_length: usize = 0;
+    var input_overflow = false;
     var recovery_error = false;
     var recovered_end: i128 = 0;
     var recovered_duration: u64 = 0;
@@ -137,15 +139,22 @@ fn run(init: std.process.Init) !void {
         if (dirty) {
             if (store.history.unfinished) |session| {
                 var buffer: [768]u8 = undefined;
-                try output(try std.fmt.bufPrint(&buffer, "\x1b[H\x1b[2JUnfinished session {d}\r\nNo time will be counted automatically.\r\nd: discard unfinished session (adds no time)\r\nt: supply UTC end time\r\nq / Ctrl-C: exit without changing history\r\n", .{session.session_id}));
+                try output(try std.fmt.bufPrint(&buffer, "\x1b[H\x1b[2JUnfinished session {d}\r\nNo time will be counted automatically.\r\nd: discard unfinished session (adds no time)\r\nt: supply UTC end time\r\nu: supply duration (Go format)\r\nq / Ctrl-C: exit without changing history\r\n", .{session.session_id}));
                 switch (recovery_mode) {
                     .choice => {},
                     .entry => {
-                        try output("End UTC (YYYY-MM-DDTHH:MM:SSZ); Enter: review; Esc: cancel\r\n");
+                        try output(if (duration_entry) "Duration (e.g. 1h30m, 2.5h, 300ms); Enter: review; Esc: cancel\r\n" else "End UTC (YYYY-MM-DDTHH:MM:SSZ); Enter: review; Esc: cancel\r\n");
                         try output(end_input[0..end_length]);
-                        if (recovery_error) try output("\r\nInvalid end time, before start, or duration exceeds range.\r\n");
+                        if (recovery_error) try output(if (duration_entry) "\r\nInvalid duration, negative result, or input/value exceeds range. Esc: restart.\r\n" else "\r\nInvalid end time, before start, or input/duration exceeds range. Esc: restart.\r\n");
                     },
-                    .confirm => try output(try std.fmt.bufPrint(&buffer, "End UTC: {s}\r\nInferred duration: {d} seconds + {d} ns\r\nBased on wall-clock timestamps, not measured elapsed time.\r\ny: confirm and save; Esc: cancel\r\n", .{ end_input[0..end_length], recovered_duration / std.time.ns_per_s, recovered_duration % std.time.ns_per_s })),
+                    .confirm => {
+                        if (duration_entry) {
+                            try output(try std.fmt.bufPrint(&buffer, "Supplied duration: {s}\r\nDerived end UTC (Unix nanoseconds): {d}\r\n", .{ end_input[0..end_length], recovered_end }));
+                        } else {
+                            try output(try std.fmt.bufPrint(&buffer, "End UTC: {s}\r\nBased on wall-clock timestamps, not measured elapsed time.\r\n", .{end_input[0..end_length]}));
+                        }
+                        try output(try std.fmt.bufPrint(&buffer, "Recovery duration: {d} seconds + {d} ns\r\ny: confirm and save; Esc: cancel\r\n", .{ recovered_duration / std.time.ns_per_s, recovered_duration % std.time.ns_per_s }));
+                    },
                 }
             } else {
                 try draw(last_key);
@@ -173,10 +182,18 @@ fn run(init: std.process.Init) !void {
             if (key == 27) {
                 recovery_mode = .choice;
                 end_length = 0;
+                input_overflow = false;
                 recovery_error = false;
             } else if (recovery_mode == .entry) {
                 if (key == '\r' or key == '\n') {
-                    if (@import("recovery.zig").endTime(end_input[0..end_length], session.start_utc_ns)) |result| {
+                    const recovery = @import("recovery.zig");
+                    if (input_overflow) {
+                        recovery_error = true;
+                        dirty = true;
+                        continue;
+                    }
+                    const parsed = if (duration_entry) recovery.duration(end_input[0..end_length], session.start_utc_ns) else recovery.endTime(end_input[0..end_length], session.start_utc_ns);
+                    if (parsed) |result| {
                         recovered_end = result.end_ns;
                         recovered_duration = result.duration_ns;
                         recovery_mode = .confirm;
@@ -186,9 +203,14 @@ fn run(init: std.process.Init) !void {
                 } else if (key == 127 or key == 8) {
                     end_length -|= 1;
                     recovery_error = false;
-                } else if (key >= 32 and key <= 126 and end_length < end_input.len) {
-                    end_input[end_length] = key;
-                    end_length += 1;
+                } else if (key >= 32 and key != 127) {
+                    if (end_length < end_input.len) {
+                        end_input[end_length] = key;
+                        end_length += 1;
+                    } else {
+                        input_overflow = true;
+                        recovery_error = true;
+                    }
                 }
             } else if (recovery_mode == .confirm) {
                 if (key == 'y') {
@@ -202,9 +224,11 @@ fn run(init: std.process.Init) !void {
                         return error.HistoryRecoveryFailed;
                     };
                 }
-            } else if (key == 't') {
+            } else if (key == 't' or key == 'u') {
+                duration_entry = key == 'u';
                 recovery_mode = .entry;
                 end_length = 0;
+                input_overflow = false;
                 recovery_error = false;
             } else if (key == 'd') {
                 store.append(init.io, .{ .version = 1, .change = .{ .discard = .{ .session_id = session.session_id } } }) catch |err| {
