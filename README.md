@@ -140,8 +140,11 @@ can ignore advisory locks. Local macOS filesystems are the intended target.
 
 Corrupt or incomplete input aborts startup with its path and reason, without
 repair, truncation, or skipped records. Preserve the file for future recovery.
-Unfinished sessions are retained in memory but not resumed or resolved. No
-TUI transitions are written yet, so timer controls remain disabled. Loading retains
+An unfinished session opens a recovery prompt showing its session ID. Press `d`
+to explicitly discard it without adding completed time, or `q` / Ctrl-C to exit
+without changing history. Other keys do not resolve recovery. Discard is persisted
+and synced before the foundation screen appears; restarting then opens stopped.
+Supplying an end time is not supported yet. Timer controls remain disabled. Loading retains
 the entire history in memory without a size limit. `Store.deinit` releases both
 the owned history and file lock; do not copy the owning store.
 
@@ -149,7 +152,7 @@ the owned history and file lock; do not copy the owning store.
 LF-terminated event at the tracked end of the locked file. It syncs the file
 before committing the in-memory state or returning success. Start, stop,
 switch, and discard use the same path; each transition is one record. Discard is
-currently an API only, not a user-facing recovery command. It appends a record
+also available in the startup recovery prompt. It appends a record
 without rewriting the original start or any completed sessions. Callers must not mutate the
 store's history directly or write the file through another handle.
 
@@ -159,14 +162,17 @@ further appends on that store (`HistoryWriteBlocked`). Report the original error
 as uncertain: part or all of the event may be on disk, even after a sync failure.
 Do not retry blindly. Close and reopen to replay what is present; incomplete or
 corrupt bytes still abort startup and must be preserved for future recovery.
-This is a storage API only; activity controls and recovery prompts remain disconnected.
+The recovery prompt exits on append failure with the history path and an uncertainty
+warning; it does not retry or claim recovery succeeded. Activity controls remain disconnected.
 
 Tests cover durable start/switch/stop/discard, preserved original bytes, discarded
 session IDs remaining consumed, rejected transitions without file changes,
 injected partial-write/sync failures, blocked retries, and restart uncertainty.
 Tests also cover creation, lock release, replay across reopen, completed/unfinished
 sessions, process exclusion, restrictive creation permissions, access errors,
-and preservation of corrupt bytes and terminal settings.
+and preservation of corrupt bytes and terminal settings. PTY checks cover recovery
+cancel/interruption, ignored keys, durable discard and restart, and a file-size-limit
+write failure with terminal cleanup.
 
 ## Configuration
 

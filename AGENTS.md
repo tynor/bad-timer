@@ -29,8 +29,10 @@ before committing logical state; write/sync failures block further appends until
 restart and preserve uncertain disk bytes. History also supports an explicit
 session-ID-matched discard event through `Store.append`: it clears an unfinished
 session without adding completed time, rewriting records, or permitting ID reuse.
-This remains an API only; older binaries reject logs containing discard events.
-TUI transition wiring, recovery prompts,
+Startup now prompts for an unfinished session: `d` durably discards it without
+adding time; `q` or interruption exits without changing history. Append failures
+exit with an uncertainty warning. Older binaries reject logs containing discard events.
+Recovery by supplying an end time, timer-control transition wiring,
 full activity TUI, and CSV export are not implemented. Real Ghostty and macOS suspend-clock validation are pending.
 Read `PLAN.md` for the approved MVP and defaults. Plan approval is not blanket
 implementation approval: propose each small implementation step and its acceptance

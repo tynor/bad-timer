@@ -1,5 +1,7 @@
 """macOS PTY checks; run after zig build: python3 tests/terminal_smoke.py."""
 import errno
+import json
+import resource
 import fcntl
 import os
 import pty
@@ -36,7 +38,7 @@ def receive(fd, needle):
     return data
 
 
-def launch(output=None, args=(), env=ENV):
+def launch(output=None, args=(), env=ENV, file_size_limit=None):
     master, slave = pty.openpty()
     original = termios.tcgetattr(slave)
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
@@ -44,6 +46,9 @@ def launch(output=None, args=(), env=ENV):
     def controlling_terminal():
         os.setsid()
         fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+        if file_size_limit is not None:
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+            resource.setrlimit(resource.RLIMIT_FSIZE, (file_size_limit, file_size_limit))
 
     process = subprocess.Popen(
         [EXE, *args], stdin=slave, stdout=slave if output is None else output,
@@ -175,6 +180,69 @@ for iteration in range(2):
         os.write(master, b"q")
         receive(master, b"\x1b[?25h\x1b[?1049l")
         assert process.wait(timeout=5) == 0, process.stderr.read()
+    finally:
+        os.close(master)
+        os.close(slave)
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+# Recovery is explicit, append-only, and independent of the current activity config.
+start = json.dumps({"version": 1, "change": {"start": {
+    "session_id": 7, "activity": {"id": "removed", "name": "Old name"},
+    "start_utc_ns": 100,
+}}}).encode() + b"\n"
+for action in (b"q", b"\x03", signal.SIGTERM, b"d", "write_failure"):
+    history.write_bytes(start)
+    process, master, slave, original = launch(
+        args=("--history", str(history)),
+        file_size_limit=len(start) if action == "write_failure" else None,
+    )
+    try:
+        receive(master, b"Supplying an end time is not supported yet.")
+        os.write(master, b"1a\r")  # Unrelated keys cannot resolve recovery.
+        receive(master, b"Unfinished session 7")
+        assert history.read_bytes() == start
+        if action == "write_failure":
+            os.write(master, b"d")
+            receive(master, b"\x1b[?25h\x1b[?1049l")
+            assert process.wait(timeout=5) == 1
+            diagnostic = process.stderr.read()
+            assert b"discard failed" in diagnostic and b"disk may contain" in diagnostic
+            assert history.read_bytes() == start
+        else:
+            if isinstance(action, bytes):
+                os.write(master, action)
+            else:
+                os.kill(process.pid, action)
+            if action == b"d":
+                receive(master, b"History loaded; no timer controls yet.")
+                saved = history.read_bytes()
+                assert saved.startswith(start)
+                assert json.loads(saved[len(start):]) == {
+                    "version": 1, "change": {"discard": {"session_id": 7}}
+                }
+                os.write(master, b"q")
+            receive(master, b"\x1b[?25h\x1b[?1049l")
+            assert process.wait(timeout=5) == 0, process.stderr.read()
+            if action != b"d":
+                assert history.read_bytes() == start
+        assert termios.tcgetattr(master) == original
+    finally:
+        os.close(master)
+        os.close(slave)
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+    # Reopening must reflect exactly the durable recovery decision.
+    process, master, slave, original = launch(args=("--history", str(history)))
+    try:
+        receive(master, b"History loaded;" if action == b"d" else b"Unfinished session 7")
+        os.write(master, b"q")
+        receive(master, b"\x1b[?25h\x1b[?1049l")
+        assert process.wait(timeout=5) == 0, process.stderr.read()
+        assert termios.tcgetattr(master) == original
     finally:
         os.close(master)
         os.close(slave)

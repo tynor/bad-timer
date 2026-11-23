@@ -125,7 +125,12 @@ fn run(init: std.process.Init) !void {
     while (!stopping.load(.monotonic)) {
         if (resized.swap(false, .monotonic)) dirty = true;
         if (dirty) {
-            try draw(last_key);
+            if (store.history.unfinished) |session| {
+                var buffer: [512]u8 = undefined;
+                try output(try std.fmt.bufPrint(&buffer, "\x1b[H\x1b[2JUnfinished session {d}\r\nNo time will be counted automatically.\r\nd: discard unfinished session (adds no time)\r\nq / Ctrl-C: exit without changing history\r\nSupplying an end time is not supported yet.\r\n", .{session.session_id}));
+            } else {
+                try draw(last_key);
+            }
             dirty = false;
         }
         var readable: c.fd_set = std.mem.zeroes(c.fd_set);
@@ -145,6 +150,16 @@ fn run(init: std.process.Init) !void {
         }
         if (n == 0) return error.TerminalDisconnected;
         if (key == 'q') break;
+        if (store.history.unfinished) |session| {
+            if (key == 'd') {
+                store.append(init.io, .{ .version = 1, .change = .{ .discard = .{ .session_id = session.session_id } } }) catch |err| {
+                    std.debug.print("bad_timer: discard failed at {s}: {s}; disk may contain part or all of the event; preserve the history file and restart to inspect it; do not retry in this process\n", .{ locations.history, @errorName(err) });
+                    return error.HistoryDiscardFailed;
+                };
+            }
+            dirty = true;
+            continue;
+        }
         last_key = key;
         dirty = true;
     }
