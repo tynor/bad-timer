@@ -1,10 +1,11 @@
 # bad-timer
 
 A keyboard-driven workday timer, currently at the terminal-foundation stage.
-**Interactive activity tracking, configuration, storage, and CSV export are not implemented.**
+**Interactive activity tracking, config file loading, storage, and CSV export are not implemented.**
 An isolated in-memory timer state module is implemented and tested; it is not yet
 connected to the terminal. An isolated macOS time-zone helper is also implemented
-and tested; configuration and daily totals are not yet wired up.
+and tested. An isolated JSON config parser is implemented and tested; config file
+loading and daily totals are not yet wired up.
 See `PLAN.md` for approved scope and the per-step review gate.
 
 ## Build and run
@@ -50,8 +51,7 @@ endpoints are retained unchanged, even if a clock correction puts the end before
 the start. Readings before the running session's monotonic start are rejected
 without changing state. Activity IDs/names are borrowed immutable strings that
 must outlive the timer and returned sessions. The caller retains completed
-sessions; the module performs no I/O or clock acquisition. Configuration validation,
-durability, totals, and UI integration remain separate work.
+sessions; the module performs no I/O or clock acquisition. Durability, totals, and UI integration remain separate work.
 
 `src/time_zone.zig` uses CoreFoundation's system IANA zone list and Gregorian
 calendar, without changing process-global `TZ`. Omitted zones default to `UTC`;
@@ -63,6 +63,34 @@ from -62135510400 through 253402214399 (a conservative range within years 1–99
 Tests cover UTC, pre-epoch time, local midnight, independent zones, invalid input,
 and Los Angeles's 23-hour/25-hour days in 2024. Rules come from the installed
 macOS time-zone database and may change with OS updates.
+
+## In-memory configuration
+
+`src/config.zig` parses this JSON shape (the executable does not load it yet):
+
+```json
+{
+  "activities": [
+    { "id": "work", "name": "Work" },
+    { "id": "break", "name": "Break" }
+  ],
+  "time_zone": "America/Los_Angeles"
+}
+```
+
+`time_zone` defaults to `UTC` when omitted; explicit null, empty, or unknown
+zones are rejected. At least one activity is required. IDs must be unique and
+nonblank; names must be nonblank (blank means only ASCII spaces, tabs, CR, or LF).
+Strings are preserved without trimming; IDs are case-sensitive. Malformed JSON,
+missing required fields, wrong types, duplicate fields, and unknown fields are
+rejected. Config order assigns numeric keys `1`–`9`; later activities are retained
+in order without numeric keys for the future menu. Reordering never changes IDs.
+
+`Config.parse` owns its strings independently of the input buffer. Call `deinit`
+once and do not copy the owning config. Activities borrowed by timers or sessions
+must not outlive it. Tests cover ownership, validation failures, default/explicit
+zones, and key assignment with fewer and more than nine activities. No config
+file location, filesystem I/O, or startup behavior is introduced by this step.
 
 A real Ghostty smoke test is still required: run the app, press a key, resize
 (including a very small window), quit with `q`, repeat with Ctrl-C, and confirm
