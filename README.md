@@ -8,7 +8,7 @@ Press `a` for a scrolling menu of all activities, including those beyond nine.
 Up/Down moves, Enter selects (with the same start/stop/switch behavior), and
 Escape cancels without changing timing. Tracking continues while the menu is open.
 Press `e` outside the menu to export completed sessions as CSV (details below).
-**Daily totals are not implemented.**
+**Daily totals have an isolated calculator but are not yet shown in the TUI.**
 See `PLAN.md` for approved scope and the per-step review gate.
 
 ## Build and run
@@ -64,7 +64,7 @@ endpoints are retained unchanged, even if a clock correction puts the end before
 the start. Readings before the running session's monotonic start are rejected
 without changing state. Activity IDs/names are borrowed immutable strings that
 must outlive the timer and returned sessions. The caller retains completed
-sessions; the timer itself performs no I/O or clock acquisition. Durability, totals, and UI integration remain separate work.
+sessions; the timer itself performs no I/O or clock acquisition.
 
 `src/clock.zig` provides `clock.now() !Instant` using macOS `clock_gettime`:
 `CLOCK_MONOTONIC_RAW` for elapsed nanoseconds and `CLOCK_REALTIME` for Unix UTC
@@ -91,11 +91,31 @@ calendar, without changing process-global `TZ`. Omitted zones default to `UTC`;
 empty, malformed, and unknown identifiers are rejected. Its owned calendar must
 be released with `deinit` and not copied. `dayAt` takes integer Unix UTC seconds
 and returns a local date plus a half-open UTC day interval; this is not duration
-accounting and does not yet split sessions or compute totals. It accepts seconds
+accounting; `src/totals.zig` handles session attribution separately. It accepts seconds
 from -62135510400 through 253402214399 (a conservative range within years 1–9999).
 Tests cover UTC, pre-epoch time, local midnight, independent zones, invalid input,
 and Los Angeles's 23-hour/25-hour days in 2024. Rules come from the installed
 macOS time-zone database and may change with OS updates.
+
+## Daily totals calculator (not yet displayed)
+
+`src/totals.zig` exposes `calculate(allocator, zone, sessions, live, now)` for the
+local day containing `now`. It combines completed sessions and live monotonic
+elapsed time by stable activity ID, including activities removed from config.
+Only nonzero totals appear, in first-contribution order, with the first contributing
+session's borrowed ID/name (renames do not create a new activity). The caller frees
+the result slice and keeps input strings alive. Durations accumulate as `u128`
+nanoseconds with checked overflow; invalid query dates, allocation failures, and
+regressing live monotonic readings return errors without changing inputs.
+
+Positive UTC spans distribute measured duration proportionally across actual local
+day boundaries, including DST. Cumulative integer rounding conserves nanoseconds
+across adjacent days. Zero or backward UTC spans attribute all measured duration
+to the start date. This is an attribution policy, not a reconstruction of when a
+wall-clock adjustment occurred; history contains only endpoint readings. Neither
+stored durations nor history bytes are changed. Tests cover midnight, fractional
+pre-epoch times, 23/25-hour days, renames/removal, live time, empty input, clock
+jumps, and timestamp extremes. TUI integration remains a separate step.
 
 ## CSV encoding and file publishing
 

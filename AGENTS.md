@@ -58,7 +58,12 @@ through that publisher to numbered `bad-timer-N.csv` files in the current direct
 skipping existing destinations. Success/path or nonfatal failure appears on screen;
 export leaves running timers and history unchanged. PTY tests cover empty history,
 completed/live sessions, repeated exports, existing destinations, and write failure.
-Daily totals are not implemented. Real Ghostty and macOS suspend-clock validation are pending.
+An isolated daily-totals calculator now groups completed/live measured durations by
+stable ID for a configured-zone day, including removed activities. Positive UTC
+spans split proportionally with cumulative nanosecond rounding; zero/backward
+spans belong to the start date. Deterministic tests cover midnight, DST, renames,
+live sessions, and clock jumps. Daily totals are not yet shown in the TUI.
+Real Ghostty and macOS suspend-clock validation are pending.
 Read `PLAN.md` for the approved MVP and defaults. Plan approval is not blanket
 implementation approval: propose each small implementation step and its acceptance
 checks, obtain explicit approval, implement only that step, then stop for review.
@@ -75,6 +80,7 @@ The approved requirements are not existing behavior.
 - `tests/terminal_smoke.py`: macOS PTY integration checks.
 - `README.md`: foundation usage, verification, and known limits.
 - `src/root.zig`: in-memory timer state, borrowed activity identity, and deterministic tests.
+- `src/totals.zig`: isolated configured-zone daily attribution, stable-ID grouping, and tests.
 - `src/time_zone.zig`, `src/time_zone.h`: macOS CoreFoundation zone/calendar helpers and tests.
 - `src/clock.zig`, `src/clock.h`: macOS monotonic/UTC clock acquisition and tests.
 - `src/config.zig`: owned JSON config parsing/loading, validation, numeric keys, and tests.

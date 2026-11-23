@@ -6,6 +6,7 @@ pub const clock = @import("clock.zig");
 pub const history = @import("history.zig");
 pub const storage = @import("storage.zig");
 pub const csv = @import("export.zig");
+pub const totals = @import("totals.zig");
 
 test {
     _ = time_zone;
@@ -14,6 +15,7 @@ test {
     _ = clock;
     _ = history;
     _ = csv;
+    _ = totals;
 }
 
 /// Strings are borrowed and must remain valid and unchanged while used by a timer or session.
