@@ -169,28 +169,71 @@ test "partial write and sync failures preserve state and block all further appen
     }
 }
 
-test "failed stop and switch retain the running session" {
+test "durable discard preserves original bytes and survives restart" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testPath(&tmp);
+    defer std.testing.allocator.free(path);
+    const discard: codec.Event = .{ .version = 1, .change = .{ .discard = .{ .session_id = 1 } } };
+    {
+        var store = try Store.open(std.testing.allocator, io, path);
+        defer store.deinit(io);
+        try std.testing.expectError(error.NotRunning, store.append(io, discard));
+        try store.append(io, test_start);
+    }
+    const original = try tmp.dir.readFileAlloc(io, "history.jsonl", std.testing.allocator, .unlimited);
+    defer std.testing.allocator.free(original);
+    {
+        var store = try Store.open(std.testing.allocator, io, path);
+        defer store.deinit(io);
+        var wrong = discard;
+        wrong.change.discard.session_id = 2;
+        try std.testing.expectError(error.SessionMismatch, store.append(io, wrong));
+        try std.testing.expectEqual(original.len, (try store.file.stat(io)).size);
+        try store.append(io, discard);
+        try std.testing.expect(store.history.unfinished == null);
+    }
+    var reopened = try Store.open(std.testing.allocator, io, path);
+    defer reopened.deinit(io);
+    try std.testing.expect(reopened.history.unfinished == null);
+    try std.testing.expectEqual(@as(usize, 0), reopened.history.sessions.items.len);
+    try std.testing.expectEqual(@as(u64, 1), reopened.history.last_session_id);
+    try std.testing.expectError(error.ReusedSessionId, reopened.append(io, test_start));
+    const bytes = try tmp.dir.readFileAlloc(io, "history.jsonl", std.testing.allocator, .unlimited);
+    defer std.testing.allocator.free(bytes);
+    try std.testing.expect(std.mem.startsWith(u8, bytes, original));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, bytes, "\n"));
+}
+
+test "failed stop switch and discard retain the running session" {
     const io = std.testing.io;
     const next: codec.Start = .{ .session_id = 2, .activity = .{ .id = "rest", .name = "Rest" }, .start_utc_ns = 200 };
     const events = [_]codec.Event{
         .{ .version = 1, .change = .{ .stop = test_stop } },
         .{ .version = 1, .change = .{ .switch_activity = .{ .stop = test_stop, .start = next } } },
+        .{ .version = 1, .change = .{ .discard = .{ .session_id = 1 } } },
     };
     for (events) |event| {
-        var tmp = std.testing.tmpDir(.{});
-        defer tmp.cleanup();
-        const path = try testPath(&tmp);
-        defer std.testing.allocator.free(path);
-        var store = try Store.open(std.testing.allocator, io, path);
-        defer store.deinit(io);
-        try store.append(io, test_start);
-        const before = store.end_offset;
-        try std.testing.expectError(error.InjectedSyncFailure, store.appendWith(event, FailingSink{ .file = store.file, .partial = false }));
-        try std.testing.expectEqualDeep(test_start.change.start, store.history.unfinished.?);
-        try std.testing.expectEqual(@as(usize, 0), store.history.sessions.items.len);
-        try std.testing.expectEqual(@as(u64, 1), store.history.last_session_id);
-        try std.testing.expectEqual(before, store.end_offset);
-        try std.testing.expectError(error.HistoryWriteBlocked, store.append(io, event));
+        for ([_]bool{ true, false }) |partial| {
+            var tmp = std.testing.tmpDir(.{});
+            defer tmp.cleanup();
+            const path = try testPath(&tmp);
+            defer std.testing.allocator.free(path);
+            var store = try Store.open(std.testing.allocator, io, path);
+            defer store.deinit(io);
+            try store.append(io, test_start);
+            const before = store.end_offset;
+            const expected = if (partial) error.InjectedWriteFailure else error.InjectedSyncFailure;
+            try std.testing.expectError(expected, store.appendWith(event, FailingSink{ .file = store.file, .partial = partial }));
+            try std.testing.expectEqualDeep(test_start.change.start, store.history.unfinished.?);
+            try std.testing.expectEqual(@as(usize, 0), store.history.sessions.items.len);
+            try std.testing.expectEqual(@as(u64, 1), store.history.last_session_id);
+            try std.testing.expectEqual(before, store.end_offset);
+            const size = (try store.file.stat(io)).size;
+            try std.testing.expectError(error.HistoryWriteBlocked, store.append(io, event));
+            try std.testing.expectEqual(size, (try store.file.stat(io)).size);
+        }
     }
 }
 

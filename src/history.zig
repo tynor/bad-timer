@@ -21,6 +21,7 @@ pub const Event = struct {
         start: Start,
         stop: Stop,
         switch_activity: struct { stop: Stop, start: Start },
+        discard: struct { session_id: u64 },
     },
 };
 
@@ -35,6 +36,9 @@ fn validate(event: Event) !void {
         .start => |start| {
             if (start.session_id == 0) return error.InvalidSessionId;
             try validateActivity(start.activity);
+        },
+        .discard => |discard| {
+            if (discard.session_id == 0) return error.InvalidSessionId;
         },
         .stop => |stop| {
             if (stop.session_id == 0) return error.InvalidSessionId;
@@ -120,12 +124,13 @@ pub const History = struct {
         };
         defer trial.deinit();
         try trial.apply(event);
-        if (event.change != .start) try self.sessions.ensureUnusedCapacity(self.arena.allocator(), 1);
+        if (event.change == .stop or event.change == .switch_activity)
+            try self.sessions.ensureUnusedCapacity(self.arena.allocator(), 1);
         var owned = event;
         const start: ?*Start = switch (owned.change) {
             .start => |*start| start,
             .switch_activity => |*change| &change.start,
-            .stop => null,
+            .stop, .discard => null,
         };
         if (start) |s| {
             s.activity.id = try self.arena.allocator().dupe(u8, s.activity.id);
@@ -143,6 +148,11 @@ pub const History = struct {
         switch (event.change) {
             .start => |start| try self.begin(start),
             .stop => |stop| try self.end(stop),
+            .discard => |discard| {
+                const start = self.unfinished orelse return error.NotRunning;
+                if (start.session_id != discard.session_id) return error.SessionMismatch;
+                self.unfinished = null;
+            },
             .switch_activity => |change| {
                 try self.end(change.stop);
                 try self.begin(change.start);
@@ -191,6 +201,27 @@ test "atomic switch completes old session and retains unfinished new session" {
     invalid = change;
     invalid.change.switch_activity.start.session_id = 1;
     try std.testing.expectError(error.ReusedSessionId, replayEvents(&.{ start_event, invalid }));
+}
+
+test "discard clears only the matching unfinished session and never reuses its ID" {
+    const discard: Event = .{ .version = 1, .change = .{ .discard = .{ .session_id = 1 } } };
+    var history = try replayEvents(&.{ start_event, stop_event, .{ .version = 1, .change = .{ .start = .{
+        .session_id = 2,
+        .activity = work,
+        .start_utc_ns = 300,
+    } } }, .{ .version = 1, .change = .{ .discard = .{ .session_id = 2 } } } });
+    defer history.deinit();
+    try std.testing.expect(history.unfinished == null);
+    try std.testing.expectEqual(@as(usize, 1), history.sessions.items.len);
+    try std.testing.expectEqual(@as(u64, 2), history.last_session_id);
+    try std.testing.expectError(error.NotRunning, replayEvents(&.{discard}));
+    try std.testing.expectError(error.NotRunning, replayEvents(&.{ start_event, discard, discard }));
+    try std.testing.expectError(error.ReusedSessionId, replayEvents(&.{ start_event, discard, start_event }));
+    var invalid = discard;
+    invalid.change.discard.session_id = 2;
+    try std.testing.expectError(error.SessionMismatch, replayEvents(&.{ start_event, invalid }));
+    invalid.change.discard.session_id = 0;
+    try std.testing.expectError(error.InvalidSessionId, replayEvents(&.{invalid}));
 }
 
 test "empty history and unfinished start do not invent sessions" {

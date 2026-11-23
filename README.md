@@ -94,13 +94,17 @@ macOS time-zone database and may change with OS updates.
 `src/history.zig` encodes version-1 JSON Lines events and replays them entirely
 in memory. `encode` returns an allocated LF-terminated record. Each event has
 required `version` and `change` fields; `change` contains exactly one `start`,
-`stop`, or `switch_activity` value. Starts carry a positive, strictly increasing
+`stop`, `switch_activity`, or `discard` value. Starts carry a positive, strictly increasing
 `session_id`, an activity ID/name snapshot, and `start_utc_ns`. Stops carry the
 same session ID and activity snapshot, `end_utc_ns`, and `duration_ns`. A switch
 contains both stop and start, with matching UTC boundary and different activity
 IDs. UTC timestamps are signed integer Unix nanoseconds; durations are unsigned
 monotonic elapsed nanoseconds, not computed from UTC endpoints. Backwards UTC
-is allowed. Session IDs cannot be reused, including after a stop.
+is allowed. A discard carries only a positive `session_id`, which must match the
+unfinished session. It clears that session without adding completed time or
+removing any prior records. Session IDs cannot be reused, including after a stop
+or discard. Older binaries that do not recognize discard events reject such logs;
+use a binary with discard support once these events have been written.
 
 `History.replay` owns its strings and completed sessions independently of the
 input or current config; call `deinit` once and do not copy it. `unfinished`
@@ -143,8 +147,10 @@ the owned history and file lock; do not copy the owning store.
 
 `Store.append` validates a transition and reserves memory before writing one
 LF-terminated event at the tracked end of the locked file. It syncs the file
-before committing the in-memory state or returning success. Start, stop, and
-switch use the same path; a switch is one record. Callers must not mutate the
+before committing the in-memory state or returning success. Start, stop,
+switch, and discard use the same path; each transition is one record. Discard is
+currently an API only, not a user-facing recovery command. It appends a record
+without rewriting the original start or any completed sessions. Callers must not mutate the
 store's history directly or write the file through another handle.
 
 Validation/allocation failures leave logical state and file contents unchanged.
@@ -155,7 +161,8 @@ Do not retry blindly. Close and reopen to replay what is present; incomplete or
 corrupt bytes still abort startup and must be preserved for future recovery.
 This is a storage API only; activity controls and recovery prompts remain disconnected.
 
-Tests cover durable start/switch/stop, rejected transitions without file changes,
+Tests cover durable start/switch/stop/discard, preserved original bytes, discarded
+session IDs remaining consumed, rejected transitions without file changes,
 injected partial-write/sync failures, blocked retries, and restart uncertainty.
 Tests also cover creation, lock release, replay across reopen, completed/unfinished
 sessions, process exclusion, restrictive creation permissions, access errors,

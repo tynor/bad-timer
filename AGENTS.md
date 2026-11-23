@@ -26,7 +26,11 @@ terminal setup. The default is `$HOME/Library/Application Support/bad-timer/hist
 `--history PATH` overrides it. Parent directories must exist. An isolated
 `Store.append` API now validates, writes and syncs start/stop/switch transitions
 before committing logical state; write/sync failures block further appends until
-restart and preserve uncertain disk bytes. TUI transition wiring, recovery prompts,
+restart and preserve uncertain disk bytes. History also supports an explicit
+session-ID-matched discard event through `Store.append`: it clears an unfinished
+session without adding completed time, rewriting records, or permitting ID reuse.
+This remains an API only; older binaries reject logs containing discard events.
+TUI transition wiring, recovery prompts,
 full activity TUI, and CSV export are not implemented. Real Ghostty and macOS suspend-clock validation are pending.
 Read `PLAN.md` for the approved MVP and defaults. Plan approval is not blanket
 implementation approval: propose each small implementation step and its acceptance
