@@ -160,6 +160,40 @@ refreshing on live elapsed seconds, transitions, and local-day changes. Stopped,
 unchanged screens do not redraw each second. PTY checks cover live updates,
 restart, removed activities, configured-zone attribution, and small-screen resize.
 
+## Isolated incomplete-tail recovery API
+
+`src/history_recovery.zig` exposes
+`recover(allocator, io, dir, source_path, destination_path) !Report`. This is a
+module API only: normal startup still rejects incomplete/corrupt history. There
+is no recovery command, prompt, or automatic replacement of the active history.
+
+Call only after explicit authorization to omit the trailing bytes. The API opens
+an existing source read-only, takes the same exclusive cooperative file lock as
+storage, and validates the entire LF-terminated prefix using normal history replay.
+It rejects malformed complete records and invalid transitions, rather than skipping
+past corruption. Empty or fully LF-terminated valid logs return
+`NoIncompleteTrailingRecord` without publishing anything.
+
+The prefix is copied byte-for-byte into a private (0600), synced temporary file,
+then atomically published to a new destination without overwriting files, symlinks,
+or directories. The source is never edited or replaced: **keep it as the backup**.
+The report gives retained/omitted byte counts, completed-session count, and any
+unfinished session ID. A retained unfinished session still requires normal explicit
+end-time/duration/discard recovery; no time is inferred from the missing tail.
+
+Even syntactically valid JSON without its final LF is omitted as uncertain. If
+there are no complete records, the result is an empty history. This can omit a
+real transition and must never be presented as lossless repair. The original
+source is needed to investigate that uncertainty. The lock protects against
+cooperating writers, not external edits or path replacement. The whole source is
+loaded into memory. Directory metadata is not synced, so power-loss durability of
+publication is not guaranteed; temporary-file cleanup is best effort.
+
+Tests cover every nonempty partial-stop tail (including JSON missing only LF),
+completed/unfinished/empty prefixes, complete-record corruption, invalid
+transitions, locking, missing sources, existing destinations, and injected partial
+write/sync failures. They check exact source preservation and unpublished-file cleanup.
+
 ## CSV encoding and file publishing
 
 Press `e` outside the activity menu to export all completed sessions to the
@@ -297,7 +331,8 @@ A write or sync failure leaves the previous logical state intact and blocks all
 further appends on that store (`HistoryWriteBlocked`). Report the original error
 as uncertain: part or all of the event may be on disk, even after a sync failure.
 Do not retry blindly. Close and reopen to replay what is present; incomplete or
-corrupt bytes still abort startup and must be preserved for future recovery.
+corrupt bytes still abort startup and must be preserved. The isolated recovery API
+below is not yet available through startup or the CLI.
 The recovery prompt exits on append failure with the history path and an uncertainty
 warning; it does not retry or claim recovery succeeded. Numeric controls use the same fail-closed policy.
 

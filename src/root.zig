@@ -4,6 +4,7 @@ pub const time_zone = @import("time_zone.zig");
 pub const config = @import("config.zig");
 pub const clock = @import("clock.zig");
 pub const history = @import("history.zig");
+pub const history_recovery = @import("history_recovery.zig");
 pub const storage = @import("storage.zig");
 pub const csv = @import("export.zig");
 pub const totals = @import("totals.zig");
@@ -14,6 +15,7 @@ test {
     _ = storage;
     _ = clock;
     _ = history;
+    _ = history_recovery;
     _ = csv;
     _ = totals;
 }

@@ -68,6 +68,13 @@ seconds, transitions, and configured-zone day changes, without idle redraws.
 Rendering clips to terminal rows with wrapping disabled and an enlargement hint;
 the activity menu still reaches every configured activity. PTY tests cover live
 updates, restart, removed activities, zone attribution, and small-screen resize.
+An isolated `history_recovery.recover` API now locks an existing source, validates
+all LF-terminated records, and publishes their exact prefix to a new no-overwrite
+file, reporting omitted tail bytes and retained completed/unfinished sessions.
+The source stays untouched as the backup. Complete-record corruption is rejected;
+even valid JSON missing LF is uncertain and omitted only with explicit caller
+authorization. Tests cover partial tails, preservation, lock/publication conflicts,
+and write/sync failures. No CLI/startup integration exists yet.
 A repeatable `tests/resource_check.py` now checks ReleaseSmall binary size,
 short-session history growth, and unchanged history content/mtime during stopped
 and running no-input windows. CPU/RSS checks were skipped at user request after
@@ -95,6 +102,7 @@ The approved requirements are not existing behavior.
 - `src/clock.zig`, `src/clock.h`: macOS monotonic/UTC clock acquisition and tests.
 - `src/config.zig`: owned JSON config parsing/loading, validation, numeric keys, and tests.
 - `src/history.zig`: owned in-memory event encoding/replay, strict validation, and tests.
+- `src/history_recovery.zig`: isolated incomplete-tail recovery to a separate file, reports, and failure tests.
 - `src/export.zig`: CSV encoding, escaping, formula safety, atomic no-overwrite file publishing, and tests.
 - `src/storage.zig`: history-file creation, lifetime locking, replay, durable append, and tests.
 - `PLAN.md`: approved scope, behavior, milestones, and acceptance checks.
