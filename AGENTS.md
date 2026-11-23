@@ -10,9 +10,11 @@ A lightweight terminal UI for tracking time during the workday:
 
 ## Status and approval gate
 
-The first approved step adds a minimal macOS/Ghostty terminal screen, single-byte
-input, resize handling, and cleanup. No timer, activity configuration, persistence,
-full activity TUI, or CSV export is implemented. Real Ghostty validation is pending.
+Implemented: a minimal macOS/Ghostty terminal screen, single-byte input, resize
+handling, and cleanup; an isolated in-memory timer state module with injected
+clock readings and deterministic tests. The timer is not connected to the terminal.
+Activity configuration, persistence, full activity TUI, and CSV export are not
+implemented. Real Ghostty and macOS suspend-clock validation are pending.
 Read `PLAN.md` for the approved MVP and defaults. Plan approval is not blanket
 implementation approval: propose each small implementation step and its acceptance
 checks, obtain explicit approval, implement only that step, then stop for review.
@@ -26,7 +28,7 @@ The approved requirements are not existing behavior.
 - `src/terminal.h`: system headers for build-time Zig C translation.
 - `tests/terminal_smoke.py`: macOS PTY integration checks.
 - `README.md`: foundation usage, verification, and known limits.
-- `src/root.zig`: starter library functions and sample test.
+- `src/root.zig`: in-memory timer state, borrowed activity identity, and deterministic tests.
 - `PLAN.md`: approved scope, behavior, milestones, and acceptance checks.
 
 Preserve the package fingerprint in `build.zig.zon`. Do not edit generated
@@ -48,8 +50,9 @@ python3 tests/terminal_smoke.py
 
 Baseline verified with Zig `0.17.1`: `zig build`, `zig build test`,
 `zig fmt --check build.zig src`, and `zig build -Doptimize=ReleaseSmall` all passed.
-`zig build run` was not checked. These checks cover only the starter template,
-not any timer functionality. The initial nono launcher denial is resolved.
+`zig build run` was not checked. The same checks also pass with the isolated timer
+state module; tests cover transitions and injected-clock behavior, not real clock
+acquisition or suspend behavior. The initial nono launcher denial is resolved.
 Do not work around future sandbox restrictions; diagnose and request an explicit grant.
 
 ## Implementation principles

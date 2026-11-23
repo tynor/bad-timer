@@ -1,7 +1,9 @@
 # bad-timer
 
 A keyboard-driven workday timer, currently at the terminal-foundation stage.
-**Activity tracking, configuration, storage, and CSV export are not implemented.**
+**Interactive activity tracking, configuration, storage, and CSV export are not implemented.**
+An isolated in-memory timer state module is implemented and tested; it is not yet
+connected to the terminal.
 See `PLAN.md` for approved scope and the per-step review gate.
 
 ## Build and run
@@ -39,6 +41,16 @@ The Python smoke test uses macOS pseudo-terminals to check input, resize, no
 idle redraw, quit/Ctrl-C/signals, runtime output-disconnection errors, termios
 restoration, and rejection of non-TTY/unsupported-terminal startup. It requires
 Python 3 and is separate from `zig build test`.
+
+`zig build test` covers the timer's start/stop, same-ID toggle, gap-free switching,
+zero-duration sessions, and wall-clock jumps. `src/root.zig` takes injected
+monotonic and UTC nanosecond readings; duration uses only monotonic time. UTC
+endpoints are retained unchanged, even if a clock correction puts the end before
+the start. Readings before the running session's monotonic start are rejected
+without changing state. Activity IDs/names are borrowed immutable strings that
+must outlive the timer and returned sessions. The caller retains completed
+sessions; the module performs no I/O or clock acquisition. Configuration validation,
+durability, totals, and UI integration remain separate work.
 
 A real Ghostty smoke test is still required: run the app, press a key, resize
 (including a very small window), quit with `q`, repeat with Ctrl-C, and confirm
