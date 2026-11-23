@@ -8,7 +8,7 @@ Press `a` for a scrolling menu of all activities, including those beyond nine.
 Up/Down moves, Enter selects (with the same start/stop/switch behavior), and
 Escape cancels without changing timing. Tracking continues while the menu is open.
 **Daily totals and user-facing CSV export are not implemented.** An isolated
-in-memory CSV encoder is available; the `e` key and report-file publishing are not yet wired up.
+CSV encoder and safe report-file publisher are available; the `e` key is not yet wired up.
 See `PLAN.md` for approved scope and the per-step review gate.
 
 ## Build and run
@@ -97,7 +97,7 @@ Tests cover UTC, pre-epoch time, local midnight, independent zones, invalid inpu
 and Los Angeles's 23-hour/25-hour days in 2024. Rules come from the installed
 macOS time-zone database and may change with OS updates.
 
-## In-memory CSV encoder
+## CSV encoding and file publishing
 
 `bad_timer.csv.encode(allocator, sessions)` in `src/export.zig` returns owned CSV
 bytes for completed sessions in input order; the caller frees the result. It does
@@ -117,7 +117,20 @@ changes exported text for spreadsheet safety; it does not change history.
 Tests cover exact output, empty input, quoting, formula neutralization in both
 text columns, historical names, pre-epoch/leap dates, timestamp limits, duration
 extremes, backwards UTC, and row order. Actual spreadsheet applications have not
-been tested. File publishing without overwrite and TUI integration remain deferred.
+been tested. TUI integration remains deferred.
+
+`bad_timer.csv.publish(allocator, io, dir, path, sessions)` encodes the supplied
+completed sessions, writes and syncs a temporary file in the destination directory,
+then atomically publishes it without replacing any existing file, directory, or
+symlink. Reports use owner-only permissions (`0600`, subject to umask). Parent
+directories must already exist. Encoding, write, sync, and publish errors propagate
+to the caller; history is never modified. Tests cover published bytes, empty history,
+existing destinations, partial-write/sync failures, and temporary-file cleanup.
+
+Cleanup is best effort: a crash or cleanup failure can leave a temporary file.
+Directory metadata is not synced, so successful publication does not guarantee
+survival of sudden power loss. No report path or filename policy is chosen yet;
+this API is not connected to the `e` key.
 
 ## In-memory history codec
 

@@ -1,4 +1,4 @@
-//! In-memory CSV export of completed sessions; no filesystem or terminal I/O.
+//! CSV encoding and atomic, no-overwrite publishing of completed sessions.
 const std = @import("std");
 const timer = @import("root.zig");
 const header = "activity_id,activity_name,start_utc,end_utc,duration_seconds\r\n";
@@ -25,6 +25,30 @@ pub fn encode(allocator: std.mem.Allocator, sessions: []const timer.Session) ![]
     }
     return output.toOwnedSlice();
 }
+
+/// Encode completed sessions, sync a private temporary file, then publish without
+/// replacing any existing destination (including symlinks). Parent directories must
+/// exist. Does not sync directory metadata: power-loss durability is not guaranteed.
+/// Temporary-file cleanup is best effort, including after a failed publish.
+pub fn publish(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, path: []const u8, sessions: []const timer.Session) !void {
+    const bytes = try encode(allocator, sessions);
+    defer allocator.free(bytes);
+    try publishBytes(io, dir, path, bytes, FileSink{});
+}
+
+fn publishBytes(io: std.Io, dir: std.Io.Dir, path: []const u8, bytes: []const u8, sink: anytype) !void {
+    var file = try dir.createFileAtomic(io, path, .{ .permissions = .fromMode(0o600), .replace = false });
+    defer file.deinit(io);
+    try sink.writeAndSync(io, file.file, bytes);
+    try file.link(io);
+}
+
+const FileSink = struct {
+    fn writeAndSync(_: FileSink, io: std.Io, file: std.Io.File, bytes: []const u8) !void {
+        try file.writePositionalAll(io, bytes, 0);
+        try file.sync(io);
+    }
+};
 
 fn text(writer: *std.Io.Writer, value: []const u8) !void {
     try writer.writeByte('"');
@@ -130,6 +154,69 @@ test "UTC calendar boundaries and nanosecond range" {
         session.end_utc_ns = 0;
         try std.testing.expectError(error.TimestampOutOfRange, encode(std.testing.allocator, &.{session}));
     }
+}
+
+fn expectEntries(dir: std.Io.Dir, expected: usize) !void {
+    var iterator = dir.iterate();
+    var count: usize = 0;
+    while (try iterator.next(std.testing.io)) |_| count += 1;
+    try std.testing.expectEqual(expected, count);
+}
+
+test "publish exact CSV and empty history without replacing reports" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try publish(std.testing.allocator, io, tmp.dir, "report.csv", &.{sample});
+    const bytes = try tmp.dir.readFileAlloc(io, "report.csv", std.testing.allocator, .unlimited);
+    defer std.testing.allocator.free(bytes);
+    const expected = try encode(std.testing.allocator, &.{sample});
+    defer std.testing.allocator.free(expected);
+    try std.testing.expectEqualStrings(expected, bytes);
+    try std.testing.expectEqual(@as(u32, 0o600), (try tmp.dir.statFile(io, "report.csv", .{})).permissions.toMode() & 0o777);
+    try std.testing.expectError(error.PathAlreadyExists, publish(std.testing.allocator, io, tmp.dir, "report.csv", &.{}));
+    const unchanged = try tmp.dir.readFileAlloc(io, "report.csv", std.testing.allocator, .unlimited);
+    defer std.testing.allocator.free(unchanged);
+    try std.testing.expectEqualStrings(bytes, unchanged);
+    try publish(std.testing.allocator, io, tmp.dir, "empty.csv", &.{});
+    const empty = try tmp.dir.readFileAlloc(io, "empty.csv", std.testing.allocator, .unlimited);
+    defer std.testing.allocator.free(empty);
+    try std.testing.expectEqualStrings(header, empty);
+    try expectEntries(tmp.dir, 2);
+}
+
+const FailingSink = struct {
+    partial: bool,
+
+    fn writeAndSync(self: FailingSink, io: std.Io, file: std.Io.File, bytes: []const u8) !void {
+        try file.writePositionalAll(io, if (self.partial) bytes[0..7] else bytes, 0);
+        return if (self.partial) error.InjectedWriteFailure else error.InjectedSyncFailure;
+    }
+};
+
+test "write and sync failures leave no report or temporary file" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    for ([_]bool{ true, false }) |partial| {
+        const expected = if (partial) error.InjectedWriteFailure else error.InjectedSyncFailure;
+        try std.testing.expectError(expected, publishBytes(std.testing.io, tmp.dir, "report.csv", header, FailingSink{ .partial = partial }));
+        try expectEntries(tmp.dir, 0);
+    }
+}
+
+test "publish refuses directories and symlinks and validates before creating files" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.createDir(io, "directory", .default_dir);
+    try std.testing.expectError(error.PathAlreadyExists, publish(std.testing.allocator, io, tmp.dir, "directory", &.{}));
+    try tmp.dir.symLink(io, "absent.csv", "link.csv", .{});
+    try std.testing.expectError(error.PathAlreadyExists, publish(std.testing.allocator, io, tmp.dir, "link.csv", &.{}));
+    var invalid = sample;
+    invalid.end_utc_ns = std.math.maxInt(i128);
+    try std.testing.expectError(error.TimestampOutOfRange, publish(std.testing.allocator, io, tmp.dir, "invalid.csv", &.{invalid}));
+    try std.testing.expectError(error.FileNotFound, publish(std.testing.allocator, io, tmp.dir, "missing/report.csv", &.{}));
+    try expectEntries(tmp.dir, 2);
 }
 
 test "row order, backwards wall clock, and duration extremes" {
