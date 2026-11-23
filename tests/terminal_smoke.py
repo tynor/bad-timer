@@ -65,7 +65,7 @@ without_home.pop("HOME", None)
 for path in (str(override), os.path.relpath(override)):
     process, master, slave, original = launch(args=("--config", path, "--history", str(override) + ".jsonl"), env=without_home)
     try:
-        receive(master, b"History loaded; no timer controls yet.")
+        receive(master, b"Timer controls ready.")
         os.write(master, b"q")
         receive(master, b"\x1b[?25h\x1b[?1049l")
         assert process.wait(timeout=5) == 0, process.stderr.read()
@@ -166,7 +166,7 @@ history.unlink()
 for iteration in range(2):
     process, master, slave, original = launch(args=("--history", str(history)))
     try:
-        receive(master, b"History loaded;")
+        receive(master, b"Timer controls ready.")
         assert history.read_bytes() == b""
         assert history.stat().st_mode & 0o777 == 0o600
         second, m2, s2, original2 = launch(args=("--history", str(history)))
@@ -216,7 +216,7 @@ for action in (b"q", b"\x03", signal.SIGTERM, b"d", "write_failure"):
             else:
                 os.kill(process.pid, action)
             if action == b"d":
-                receive(master, b"History loaded; no timer controls yet.")
+                receive(master, b"Timer controls ready.")
                 saved = history.read_bytes()
                 assert saved.startswith(start)
                 assert json.loads(saved[len(start):]) == {
@@ -238,7 +238,7 @@ for action in (b"q", b"\x03", signal.SIGTERM, b"d", "write_failure"):
     # Reopening must reflect exactly the durable recovery decision.
     process, master, slave, original = launch(args=("--history", str(history)))
     try:
-        receive(master, b"History loaded;" if action == b"d" else b"Unfinished session 7")
+        receive(master, b"Timer controls ready." if action == b"d" else b"Unfinished session 7")
         os.write(master, b"q")
         receive(master, b"\x1b[?25h\x1b[?1049l")
         assert process.wait(timeout=5) == 0, process.stderr.read()
@@ -274,7 +274,7 @@ for action, duration_input in [(a, d) for d in (False, True) for a in ("save", "
         if action in ("save", "failure"):
             os.write(master, b"y")
             if action == "save":
-                receive(master, b"History loaded;")
+                receive(master, b"Timer controls ready.")
                 saved = history.read_bytes()
                 assert saved.startswith(start)
                 stop = json.loads(saved[len(start):])["change"]["stop"]
@@ -304,7 +304,7 @@ for action, duration_input in [(a, d) for d in (False, True) for a in ("save", "
             process.wait(timeout=5)
     process, master, slave, original = launch(args=("--history", str(history)))
     try:
-        receive(master, b"History loaded;" if action == "save" else b"Unfinished session 7")
+        receive(master, b"Timer controls ready." if action == "save" else b"Unfinished session 7")
         os.write(master, b"q")
         receive(master, b"\x1b[?25h\x1b[?1049l")
         assert process.wait(timeout=5) == 0
@@ -320,7 +320,7 @@ for exit_key in (b"q", b"\x03", signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
     print("checking", repr(exit_key), flush=True)
     process, master, slave, original = launch()
     try:
-        receive(master, b"History loaded; no timer controls yet.")
+        receive(master, b"1: Work\r\n")
         assert not select.select([master], [], [], 1.2)[0], "idle redraw"
         os.write(master, b"x")
         receive(master, b"Last key byte: 120")
@@ -341,11 +341,77 @@ for exit_key in (b"q", b"\x03", signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
             process.kill()
             process.wait(timeout=5)
 
+# Numeric controls persist atomic switches, same-key stops, and clean exits.
+controls = Path(HOME.name) / "controls.json"
+controls.write_text(json.dumps({"activities": [
+    {"id": "work", "name": "Work"}, {"id": "rest", "name": "Rest"}]}))
+tracked = Path(HOME.name) / "controls.jsonl"
+for exit_key in (b"q", b"\x03", signal.SIGTERM):
+    tracked.write_bytes(b"")
+    process, master, slave, original = launch(args=("--config", str(controls), "--history", str(tracked)))
+    try:
+        receive(master, b"2: Rest")
+        for key, marker in ((b"1", b"Active: Work"), (b"2", b"Active: Rest"),
+                            (b"2", b"Stopped"), (b"1", b"Active: Work")):
+            os.write(master, key)
+            receive(master, marker)
+        receive(master, b"Elapsed: 1 seconds")
+        if isinstance(exit_key, bytes):
+            os.write(master, exit_key)
+        else:
+            os.kill(process.pid, exit_key)
+        receive(master, b"\x1b[?25h\x1b[?1049l")
+        assert process.wait(timeout=5) == 0, process.stderr.read()
+        assert termios.tcgetattr(master) == original
+        changes = [json.loads(line)["change"] for line in tracked.read_bytes().splitlines()]
+        assert [next(iter(c)) for c in changes] == ["start", "switch_activity", "stop", "start", "stop"]
+        switch = changes[1]["switch_activity"]
+        assert switch["stop"]["end_utc_ns"] == switch["start"]["start_utc_ns"]
+        assert changes[-1]["stop"]["duration_ns"] >= 1_000_000_000
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        os.close(master)
+        os.close(slave)
+    process, master, slave, original = launch(args=("--history", str(tracked)))
+    try:
+        receive(master, b"Stopped")
+        saved = tracked.read_bytes()
+        os.write(master, b"q")
+        receive(master, b"\x1b[?25h\x1b[?1049l")
+        assert process.wait(timeout=5) == 0
+        assert tracked.read_bytes() == saved
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        os.close(master)
+        os.close(slave)
+
+# Failed timer appends exit with uncertainty and never acknowledge a start.
+tracked.write_bytes(b"")
+process, master, slave, original = launch(args=("--history", str(tracked)), file_size_limit=0)
+try:
+    receive(master, b"Timer controls ready.")
+    os.write(master, b"1")
+    receive(master, b"\x1b[?25h\x1b[?1049l")
+    assert process.wait(timeout=5) == 1
+    assert b"disk may contain" in process.stderr.read()
+    assert tracked.read_bytes() == b""
+    assert termios.tcgetattr(master) == original
+finally:
+    if process.poll() is None:
+        process.kill()
+        process.wait(timeout=5)
+    os.close(master)
+    os.close(slave)
+
 # A disconnected output terminal must unwind raw mode on the input terminal.
 out_master, out_slave = pty.openpty()
 process, master, slave, original = launch(out_slave)
 try:
-    receive(out_master, b"History loaded; no timer controls yet.")
+    receive(out_master, b"Timer controls ready.")
     os.close(out_master)
     os.write(master, b"x")
     assert process.wait(timeout=5) == 1

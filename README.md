@@ -1,11 +1,10 @@
 # bad-timer
 
-A keyboard-driven workday timer, currently at the terminal-foundation stage.
-**Interactive activity tracking, transition persistence, and CSV export are not implemented.**
-An isolated in-memory timer state module is implemented and tested; it is not yet
-connected to the terminal. An isolated macOS time-zone helper is also implemented
-and tested. JSON config is loaded and validated at startup; daily totals and
-activity controls are not yet wired up.
+A keyboard-driven workday timer with durable numeric-key activity tracking.
+Keys `1`–`9` select activities in config order: start while stopped, stop the
+same activity, or switch atomically to another. The screen shows keys, active
+activity, and monotonic elapsed seconds. Transitions are synced before display.
+**The activity menu, daily totals, and CSV export are not implemented.**
 See `PLAN.md` for approved scope and the per-step review gate.
 
 ## Build and run
@@ -30,10 +29,12 @@ zig build -Doptimize=ReleaseSmall
 python3 tests/terminal_smoke.py
 ```
 
-The screen shows terminal dimensions and the last input byte. Press any key to
-exercise immediate input; `q` or Ctrl-C quits. Resize redraws the screen. There
-is no timer yet; history is loaded and locked at startup. Input is byte-based; escape sequences and Unicode decoding
-will be added only as required by later approved UI work.
+`q`, Ctrl-C, and handled termination signals stop and save a running session.
+Restart opens stopped. Unexpected terminal errors leave an unfinished session for
+explicit recovery. Save failures exit with an uncertainty warning; preserve the
+history and restart, rather than retrying. Resize redraws the screen; elapsed
+seconds redraw only while running. Input remains byte-based; menu escape-sequence
+handling is deferred. Config-name control bytes render as `?`, not terminal commands.
 
 Uses macOS libc and CoreFoundation APIs via Zig's build-time C translation, with no third-party
 dependencies. Input waits in `select` with a one-second timeout, not busy polling;
@@ -66,7 +67,7 @@ an atomic snapshot; scheduling delays can separate them. UTC remains reporting
 metadata and may jump without changing elapsed duration. OS read failures return
 `ClockReadFailed`; invalid or unrepresentable readings return
 `ClockReadingOutOfRange`. No fabricated reading or fallback clock is returned.
-The adapter is exported but is not yet called by the terminal executable.
+The terminal executable uses this adapter for live timer transitions and elapsed display.
 Tests cover nanosecond conversion, pre-epoch UTC, invalid readings, OS read
 failure, and feeding live readings into a timer.
 
@@ -118,7 +119,7 @@ individual records; replay and append preparation also check preceding transitio
 Tests cover round trips, escaped/Unicode names, ownership, atomic switches,
 unfinished sessions, backwards wall clocks, corruption, and invalid transitions.
 The codec itself performs no I/O. Storage uses it for startup replay and transition
-preparation. Recovery prompts are not implemented. Replay currently retains the entire history in
+preparation. Startup recovery prompts are described below. Replay currently retains the entire history in
 memory; it does not stream or impose a file-size limit.
 
 ## History file loading and durable appends
@@ -163,9 +164,9 @@ Escape cancels. This is an explicit estimate, not measured elapsed time.
 Entry is limited to 256 UTF-8 bytes; overflow requires Escape and re-entry.
 
 Discard or confirmed stop is persisted and synced
-before the foundation screen appears; restarting then opens stopped. Both append
+before the timer screen appears; restarting then opens stopped. Both append
 without rewriting original records and use the historical activity name/ID.
-Timer controls remain disabled. Loading retains
+Loading retains
 the entire history in memory without a size limit. `Store.deinit` releases both
 the owned history and file lock; do not copy the owning store.
 
@@ -184,7 +185,7 @@ as uncertain: part or all of the event may be on disk, even after a sync failure
 Do not retry blindly. Close and reopen to replay what is present; incomplete or
 corrupt bytes still abort startup and must be preserved for future recovery.
 The recovery prompt exits on append failure with the history path and an uncertainty
-warning; it does not retry or claim recovery succeeded. Activity controls remain disconnected.
+warning; it does not retry or claim recovery succeeded. Numeric controls use the same fail-closed policy.
 
 Tests cover durable start/switch/stop/discard, preserved original bytes, discarded
 session IDs remaining consumed, rejected transitions without file changes,

@@ -16,9 +16,9 @@ clock readings and deterministic tests; an isolated CoreFoundation time-zone hel
 with IANA validation, local dates, and UTC calendar-day boundaries; an isolated
 in-memory JSON activity-config parser with validation and ordered numeric keys.
 Config is loaded and validated from `$HOME/Library/Application Support/bad-timer/config.json`
-(or `--config PATH`) before terminal setup; activity controls and timer state remain disconnected.
+(or `--config PATH`) before terminal setup.
 An isolated macOS clock adapter now returns timer readings using suspend-inclusive
-`CLOCK_MONOTONIC_RAW` and UTC `CLOCK_REALTIME`; it is not connected to the TUI.
+`CLOCK_MONOTONIC_RAW` and UTC `CLOCK_REALTIME`; it now supplies live TUI readings.
 An isolated versioned in-memory JSON Lines history codec/replayer now validates
 start/stop/switch transitions and retains completed and unfinished sessions.
 Startup now opens/creates and exclusively locks a history file, replaying it before
@@ -39,8 +39,13 @@ inputs and cancellation leave history unchanged. Recovery also accepts Go
 `time.ParseDuration` syntax through `u`, rejecting negative results and requiring
 confirmation of duration and derived UTC end before saving. Go-generated fixtures
 verify parsing compatibility; input is limited to 256 UTF-8 bytes.
-Timer-control transition wiring,
-full activity TUI, and CSV export are not implemented. Real Ghostty and macOS suspend-clock validation are pending.
+Numeric keys now start/stop/switch activities, persisting and syncing before
+committing live timer state. The screen shows assigned keys, active activity,
+and elapsed seconds; clean quit and handled termination stop/save a live session.
+Save failures exit with uncertainty; terminal errors leave explicit recovery for
+restart. PTY tests cover controls, atomic switch, clean-exit saving, restart,
+and append failure. Full activity TUI (menu and daily totals) and CSV export are
+not implemented. Real Ghostty and macOS suspend-clock validation are pending.
 Read `PLAN.md` for the approved MVP and defaults. Plan approval is not blanket
 implementation approval: propose each small implementation step and its acceptance
 checks, obtain explicit approval, implement only that step, then stop for review.

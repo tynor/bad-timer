@@ -1,7 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const c = @import("terminal_c");
-const Config = @import("bad_timer").config.Config;
+const timer = @import("bad_timer");
+const Config = timer.config.Config;
 
 test {
     _ = @import("recovery.zig");
@@ -132,12 +133,17 @@ fn run(init: std.process.Init) !void {
     var recovery_error = false;
     var recovered_end: i128 = 0;
     var recovered_duration: u64 = 0;
+    var live: timer.Timer = .{};
+    var last_second: u64 = 0;
     var last_key: ?u8 = null;
     var dirty = true;
     while (!stopping.load(.monotonic)) {
         if (resized.swap(false, .monotonic)) dirty = true;
+        const second = (try live.elapsed(try timer.clock.now())) / std.time.ns_per_s;
+        if (second != last_second) dirty = true;
+        last_second = second;
         if (dirty) {
-            if (store.history.unfinished) |session| {
+            if (if (live.running == null) store.history.unfinished else null) |session| {
                 var buffer: [768]u8 = undefined;
                 try output(try std.fmt.bufPrint(&buffer, "\x1b[H\x1b[2JUnfinished session {d}\r\nNo time will be counted automatically.\r\nd: discard unfinished session (adds no time)\r\nt: supply UTC end time\r\nu: supply duration (Go format)\r\nq / Ctrl-C: exit without changing history\r\n", .{session.session_id}));
                 switch (recovery_mode) {
@@ -157,7 +163,7 @@ fn run(init: std.process.Init) !void {
                     },
                 }
             } else {
-                try draw(last_key);
+                try draw(last_key, config, live, second);
             }
             dirty = false;
         }
@@ -178,7 +184,7 @@ fn run(init: std.process.Init) !void {
         }
         if (n == 0) return error.TerminalDisconnected;
         if (key == 'q') break;
-        if (store.history.unfinished) |session| {
+        if (if (live.running == null) store.history.unfinished else null) |session| {
             if (key == 27) {
                 recovery_mode = .choice;
                 end_length = 0;
@@ -239,15 +245,69 @@ fn run(init: std.process.Init) !void {
             dirty = true;
             continue;
         }
+        if (key >= '1' and key <= '9') {
+            const index: usize = key - '1';
+            if (index < config.activities().len)
+                try transition(&live, &store, init.io, config.activities()[index], locations.history);
+        }
         last_key = key;
         dirty = true;
     }
+    if (live.running != null) try transition(&live, &store, init.io, null, locations.history);
 }
 
-fn draw(key: ?u8) !void {
+fn transition(live: *timer.Timer, store: *timer.storage.Store, io: std.Io, activity: ?timer.Activity, path: []const u8) !void {
+    const now = try timer.clock.now();
+    var next = live.*;
+    const completed = if (activity) |selected| try next.select(selected, now) else try next.stop(now);
+    const stop: ?timer.history.Stop = if (completed) |session| .{
+        .session_id = store.history.unfinished.?.session_id,
+        .activity = session.activity,
+        .end_utc_ns = session.end_utc_ns,
+        .duration_ns = session.duration_ns,
+    } else null;
+    const start: ?timer.history.Start = if (next.running) |running| .{
+        .session_id = try std.math.add(u64, store.history.last_session_id, 1),
+        .activity = running.activity,
+        .start_utc_ns = running.start.utc_ns,
+    } else null;
+    const event: timer.history.Event = .{ .version = 1, .change = if (start) |s|
+        (if (stop) |t| .{ .switch_activity = .{ .start = s, .stop = t } } else .{ .start = s })
+    else if (stop) |t| .{ .stop = t } else return };
+    store.append(io, event) catch |err| {
+        std.debug.print("bad_timer: timer save failed at {s}: {s}; disk may contain part or all of the event; preserve the history file and restart to inspect it; do not retry in this process\n", .{ path, @errorName(err) });
+        return error.TimerSaveFailed;
+    };
+    live.* = next;
+}
+
+fn activityName(name: []const u8) !void {
+    // Config names are data, not terminal control sequences.
+    var buffer: [256]u8 = undefined;
+    var offset: usize = 0;
+    while (offset < name.len) {
+        const length = @min(buffer.len, name.len - offset);
+        for (name[offset..][0..length], buffer[0..length]) |byte, *dest|
+            dest.* = if (byte < 32 or byte == 127) '?' else byte;
+        try output(buffer[0..length]);
+        offset += length;
+    }
+}
+
+fn draw(key: ?u8, config: Config, live: timer.Timer, seconds: u64) !void {
     var size: c.struct_winsize = std.mem.zeroes(c.struct_winsize);
     if (c.ioctl(c.STDOUT_FILENO, c.TIOCGWINSZ, &size) != 0) return error.TerminalSizeFailed;
     var buffer: [256]u8 = undefined;
-    const text = try std.fmt.bufPrint(&buffer, "\x1b[H\x1b[2Jbad-timer foundation\r\n{d} columns x {d} rows\r\nLast key byte: {d}\r\nq: quit | Ctrl-C: quit\r\nHistory loaded; no timer controls yet.\r\n", .{ size.ws_col, size.ws_row, key orelse 0 });
+    const text = try std.fmt.bufPrint(&buffer, "\x1b[H\x1b[2Jbad-timer\r\n{d} columns x {d} rows\r\nLast key byte: {d}\r\nq: save and quit | Ctrl-C: save and quit\r\nTimer controls ready.\r\nElapsed: {d} seconds\r\n", .{ size.ws_col, size.ws_row, key orelse 0, seconds });
     try output(text);
+    try output(if (live.running != null) "Active: " else "Stopped");
+    if (live.running) |running| try activityName(running.activity.name);
+    try output("\r\n");
+    for (config.activities(), 0..) |activity, index| {
+        if (config.numericKey(index)) |key_byte| {
+            try output(&.{ key_byte, ':', ' ' });
+            try activityName(activity.name);
+            try output("\r\n");
+        }
+    }
 }
