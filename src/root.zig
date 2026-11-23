@@ -1,5 +1,10 @@
 //! In-memory timer state. Callers supply clock readings and retain completed sessions.
 const std = @import("std");
+pub const time_zone = @import("time_zone.zig");
+
+test {
+    _ = time_zone;
+}
 
 /// Strings are borrowed and must remain valid and unchanged while used by a timer or session.
 pub const Activity = struct {

@@ -3,7 +3,8 @@
 A keyboard-driven workday timer, currently at the terminal-foundation stage.
 **Interactive activity tracking, configuration, storage, and CSV export are not implemented.**
 An isolated in-memory timer state module is implemented and tested; it is not yet
-connected to the terminal.
+connected to the terminal. An isolated macOS time-zone helper is also implemented
+and tested; configuration and daily totals are not yet wired up.
 See `PLAN.md` for approved scope and the per-step review gate.
 
 ## Build and run
@@ -28,7 +29,7 @@ exercise immediate input; `q` or Ctrl-C quits. Resize redraws the screen. There
 is no timer yet. Input is byte-based; escape sequences and Unicode decoding
 will be added only as required by later approved UI work.
 
-Uses macOS libc APIs via Zig's build-time C translation, with no third-party
+Uses macOS libc and CoreFoundation APIs via Zig's build-time C translation, with no third-party
 dependencies. Input waits in `select` with a one-second timeout, not busy polling;
 idle timeouts do not redraw or write files. SIGINT, SIGTERM, SIGHUP, and SIGQUIT
 unwind the screen and restore termios. Ctrl-Z suspension is disabled while the
@@ -51,6 +52,17 @@ without changing state. Activity IDs/names are borrowed immutable strings that
 must outlive the timer and returned sessions. The caller retains completed
 sessions; the module performs no I/O or clock acquisition. Configuration validation,
 durability, totals, and UI integration remain separate work.
+
+`src/time_zone.zig` uses CoreFoundation's system IANA zone list and Gregorian
+calendar, without changing process-global `TZ`. Omitted zones default to `UTC`;
+empty, malformed, and unknown identifiers are rejected. Its owned calendar must
+be released with `deinit` and not copied. `dayAt` takes integer Unix UTC seconds
+and returns a local date plus a half-open UTC day interval; this is not duration
+accounting and does not yet split sessions or compute totals. It accepts seconds
+from -62135510400 through 253402214399 (a conservative range within years 1–9999).
+Tests cover UTC, pre-epoch time, local midnight, independent zones, invalid input,
+and Los Angeles's 23-hour/25-hour days in 2024. Rules come from the installed
+macOS time-zone database and may change with OS updates.
 
 A real Ghostty smoke test is still required: run the app, press a key, resize
 (including a very small window), quit with `q`, repeat with Ctrl-C, and confirm

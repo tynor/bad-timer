@@ -12,7 +12,9 @@ A lightweight terminal UI for tracking time during the workday:
 
 Implemented: a minimal macOS/Ghostty terminal screen, single-byte input, resize
 handling, and cleanup; an isolated in-memory timer state module with injected
-clock readings and deterministic tests. The timer is not connected to the terminal.
+clock readings and deterministic tests; an isolated CoreFoundation time-zone helper
+with IANA validation, local dates, and UTC calendar-day boundaries. Neither helper
+is connected to the terminal.
 Activity configuration, persistence, full activity TUI, and CSV export are not
 implemented. Real Ghostty and macOS suspend-clock validation are pending.
 Read `PLAN.md` for the approved MVP and defaults. Plan approval is not blanket
@@ -29,6 +31,7 @@ The approved requirements are not existing behavior.
 - `tests/terminal_smoke.py`: macOS PTY integration checks.
 - `README.md`: foundation usage, verification, and known limits.
 - `src/root.zig`: in-memory timer state, borrowed activity identity, and deterministic tests.
+- `src/time_zone.zig`, `src/time_zone.h`: macOS CoreFoundation zone/calendar helpers and tests.
 - `PLAN.md`: approved scope, behavior, milestones, and acceptance checks.
 
 Preserve the package fingerprint in `build.zig.zon`. Do not edit generated

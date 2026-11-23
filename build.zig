@@ -41,6 +41,15 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
+    const time_zone_c = b.addTranslateC(.{
+        .root_source_file = b.path("src/time_zone.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    mod.addImport("time_zone_c", time_zone_c.createModule());
+    mod.link_libc = true;
+    mod.linkFramework("CoreFoundation", .{});
+
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
     // to the module defined above, it's sometimes preferable to split business
