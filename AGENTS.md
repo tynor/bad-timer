@@ -44,8 +44,11 @@ committing live timer state. The screen shows assigned keys, active activity,
 and elapsed seconds; clean quit and handled termination stop/save a live session.
 Save failures exit with uncertainty; terminal errors leave explicit recovery for
 restart. PTY tests cover controls, atomic switch, clean-exit saving, restart,
-and append failure. Full activity TUI (menu and daily totals) and CSV export are
-not implemented. Real Ghostty and macOS suspend-clock validation are pending.
+and append failure. An `a` activity menu now lists all configured activities with
+Up/Down navigation, scrolling, Enter selection through the same durable transition
+path, and Escape cancellation. PTY checks cover selection beyond nine, fragmented
+arrow input, resize/scrolling, cancellation, and menu start/stop/switch.
+Daily totals and CSV export are not implemented. Real Ghostty and macOS suspend-clock validation are pending.
 Read `PLAN.md` for the approved MVP and defaults. Plan approval is not blanket
 implementation approval: propose each small implementation step and its acceptance
 checks, obtain explicit approval, implement only that step, then stop for review.

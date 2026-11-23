@@ -389,6 +389,67 @@ for exit_key in (b"q", b"\x03", signal.SIGTERM):
         os.close(master)
         os.close(slave)
 
+# Menu selection reaches beyond nine, scrolls after resize, and uses durable toggles.
+menu_config = Path(HOME.name) / "menu.json"
+menu_config.write_text(json.dumps({"activities": [
+    {"id": str(i), "name": f"Activity {i}"} for i in range(1, 13)]}))
+menu_history = Path(HOME.name) / "menu.jsonl"
+process, master, slave, original = launch(args=("--config", str(menu_config), "--history", str(menu_history)))
+try:
+    receive(master, b"9: Activity 9")
+    os.write(master, b"1")
+    receive(master, b"Active: Activity 1")
+    saved = menu_history.read_bytes()
+    os.write(master, b"a")
+    receive(master, b"> 1: Activity 1")
+    # Fragmented CSI and application-cursor arrows are both accepted.
+    os.write(master, b"\x1b")
+    time.sleep(0.01)
+    os.write(master, b"[B")
+    receive(master, b"> 2: Activity 2")
+    os.write(master, b"\x1bOA")
+    receive(master, b"> 1: Activity 1")
+    os.write(master, b"\x1b")
+    receive(master, b"Active: Activity 1")
+    assert menu_history.read_bytes() == saved, "cancel changed timing"
+    os.write(master, b"a")
+    receive(master, b"> 1: Activity 1")
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 4, 40, 0, 0))
+    os.kill(process.pid, signal.SIGWINCH)
+    receive(master, b"> 1: Activity 1")
+    for i in range(2, 11):
+        os.write(master, b"\x1b[B")
+        screen = receive(master, f"> {i}: Activity {i}".encode())
+    assert b"  1: Activity 1\r\n" not in screen, "menu did not scroll"
+    os.write(master, b"\r")
+    receive(master, b"Active: Activity 10")
+    os.write(master, b"a")
+    receive(master, b"> 1: Activity 1")
+    for i in range(2, 11):
+        os.write(master, b"\x1b[B")
+        receive(master, f"> {i}: Activity {i}".encode())
+    os.write(master, b"\r")
+    receive(master, b"Stopped")
+    os.write(master, b"a")
+    receive(master, b"> 1: Activity 1")
+    os.write(master, b"\r")
+    receive(master, b"Active: Activity 1")
+    os.write(master, b"q")
+    receive(master, b"\x1b[?25h\x1b[?1049l")
+    assert process.wait(timeout=5) == 0, process.stderr.read()
+    assert termios.tcgetattr(master) == original
+    changes = [json.loads(line)["change"] for line in menu_history.read_bytes().splitlines()]
+    assert [next(iter(c)) for c in changes] == ["start", "switch_activity", "stop", "start", "stop"]
+    switch = changes[1]["switch_activity"]
+    assert switch["start"]["activity"]["id"] == "10"
+    assert switch["stop"]["end_utc_ns"] == switch["start"]["start_utc_ns"]
+finally:
+    if process.poll() is None:
+        process.kill()
+        process.wait(timeout=5)
+    os.close(master)
+    os.close(slave)
+
 # Failed timer appends exit with uncertainty and never acknowledge a start.
 tracked.write_bytes(b"")
 process, master, slave, original = launch(args=("--history", str(tracked)), file_size_limit=0)

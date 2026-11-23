@@ -4,7 +4,10 @@ A keyboard-driven workday timer with durable numeric-key activity tracking.
 Keys `1`–`9` select activities in config order: start while stopped, stop the
 same activity, or switch atomically to another. The screen shows keys, active
 activity, and monotonic elapsed seconds. Transitions are synced before display.
-**The activity menu, daily totals, and CSV export are not implemented.**
+Press `a` for a scrolling menu of all activities, including those beyond nine.
+Up/Down moves, Enter selects (with the same start/stop/switch behavior), and
+Escape cancels without changing timing. Tracking continues while the menu is open.
+**Daily totals and CSV export are not implemented.**
 See `PLAN.md` for approved scope and the per-step review gate.
 
 ## Build and run
@@ -33,8 +36,10 @@ python3 tests/terminal_smoke.py
 Restart opens stopped. Unexpected terminal errors leave an unfinished session for
 explicit recovery. Save failures exit with an uncertainty warning; preserve the
 history and restart, rather than retrying. Resize redraws the screen; elapsed
-seconds redraw only while running. Input remains byte-based; menu escape-sequence
-handling is deferred. Config-name control bytes render as `?`, not terminal commands.
+seconds redraw only while running. Menu arrows accept CSI and application-cursor
+sequences; a standalone Escape cancels after a 50 ms sequence timeout.
+Config-name control bytes render as `?`, not terminal commands. Long menu names
+are clipped at the terminal edge rather than wrapping; resize adjusts the visible list.
 
 Uses macOS libc and CoreFoundation APIs via Zig's build-time C translation, with no third-party
 dependencies. Input waits in `select` with a one-second timeout, not busy polling;
@@ -47,7 +52,8 @@ screen cleanup; use `stty sane` and `reset` if necessary.
 
 The Python smoke test uses macOS pseudo-terminals to check input, resize, no
 idle redraw, quit/Ctrl-C/signals, runtime output-disconnection errors, termios
-restoration, and rejection of non-TTY/unsupported-terminal startup. It requires
+restoration, menu selection beyond nine, scrolling/resize, cancellation, durable
+menu start/stop/switch, and rejection of non-TTY/unsupported-terminal startup. It requires
 Python 3 and is separate from `zig build test`.
 
 `zig build test` covers the timer's start/stop, same-ID toggle, gap-free switching,

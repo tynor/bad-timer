@@ -136,6 +136,7 @@ fn run(init: std.process.Init) !void {
     var live: timer.Timer = .{};
     var last_second: u64 = 0;
     var last_key: ?u8 = null;
+    var menu: ?usize = null;
     var dirty = true;
     while (!stopping.load(.monotonic)) {
         if (resized.swap(false, .monotonic)) dirty = true;
@@ -162,6 +163,8 @@ fn run(init: std.process.Init) !void {
                         try output(try std.fmt.bufPrint(&buffer, "Recovery duration: {d} seconds + {d} ns\r\ny: confirm and save; Esc: cancel\r\n", .{ recovered_duration / std.time.ns_per_s, recovered_duration % std.time.ns_per_s }));
                     },
                 }
+            } else if (menu) |selected| {
+                try drawMenu(config, selected);
             } else {
                 try draw(last_key, config, live, second);
             }
@@ -245,6 +248,28 @@ fn run(init: std.process.Init) !void {
             dirty = true;
             continue;
         }
+        if (menu) |selected| {
+            if (key == 27) {
+                const arrow = try escapeKey();
+                if (arrow == null) {
+                    menu = null;
+                } else if (arrow.? == 'A') {
+                    menu = selected -| 1;
+                } else if (arrow.? == 'B') {
+                    menu = @min(selected + 1, config.activities().len - 1);
+                }
+            } else if (key == '\r' or key == '\n') {
+                try transition(&live, &store, init.io, config.activities()[selected], locations.history);
+                menu = null;
+            }
+            dirty = true;
+            continue;
+        }
+        if (key == 27) {
+            _ = try escapeKey();
+            continue;
+        }
+        if (key == 'a') menu = 0;
         if (key >= '1' and key <= '9') {
             const index: usize = key - '1';
             if (index < config.activities().len)
@@ -281,6 +306,51 @@ fn transition(live: *timer.Timer, store: *timer.storage.Store, io: std.Io, activ
     live.* = next;
 }
 
+// Bound escape-sequence reads so a standalone Escape cancels without waiting a second.
+fn escapeKey() !?u8 {
+    var prefix: u8 = 0;
+    for (0..16) |index| {
+        var readable: c.fd_set = std.mem.zeroes(c.fd_set);
+        c.FD_SET(c.STDIN_FILENO, &readable);
+        var timeout = c.struct_timeval{ .tv_sec = 0, .tv_usec = 50000 };
+        const ready = c.select(c.STDIN_FILENO + 1, &readable, null, null, &timeout);
+        if (ready < 0) {
+            if (c.__error().* == c.EINTR) return null;
+            return error.TerminalWaitFailed;
+        }
+        if (ready == 0) return null;
+        var byte: u8 = undefined;
+        const count = c.read(c.STDIN_FILENO, &byte, 1);
+        if (count == 0) return error.TerminalDisconnected;
+        if (count < 0) return error.TerminalReadFailed;
+        if (index == 0) {
+            prefix = byte;
+            if (prefix != '[' and prefix != 'O') return null;
+        } else if (byte >= 0x40 and byte <= 0x7e) {
+            return if (index == 1) byte else 0;
+        }
+    }
+    return 0;
+}
+
+fn drawMenu(config: Config, selected: usize) !void {
+    var size: c.struct_winsize = std.mem.zeroes(c.struct_winsize);
+    if (c.ioctl(c.STDOUT_FILENO, c.TIOCGWINSZ, &size) != 0) return error.TerminalSizeFailed;
+    // Disable wrapping so long or wide Unicode names cannot push the selection off screen.
+    try output("\x1b[H\x1b[2J\x1b[?7l");
+    defer output("\x1b[?7h") catch {};
+    const rows: usize = @max(size.ws_row, 1);
+    if (rows > 1) try output("Activities: Up/Down, Enter: select, Esc: cancel\r\n");
+    const capacity = rows - @intFromBool(rows > 1);
+    const first = selected -| (capacity - 1);
+    var buffer: [80]u8 = undefined;
+    for (first..@min(first + capacity, config.activities().len)) |index| {
+        if (index != first) try output("\r\n");
+        try output(try std.fmt.bufPrint(&buffer, "{s}{d}: ", .{ if (index == selected) "> " else "  ", index + 1 }));
+        try activityName(config.activities()[index].name);
+    }
+}
+
 fn activityName(name: []const u8) !void {
     // Config names are data, not terminal control sequences.
     var buffer: [256]u8 = undefined;
@@ -303,6 +373,7 @@ fn draw(key: ?u8, config: Config, live: timer.Timer, seconds: u64) !void {
     try output(if (live.running != null) "Active: " else "Stopped");
     if (live.running) |running| try activityName(running.activity.name);
     try output("\r\n");
+    try output("a: activity menu\r\n");
     for (config.activities(), 0..) |activity, index| {
         if (config.numericKey(index)) |key_byte| {
             try output(&.{ key_byte, ':', ' ' });
