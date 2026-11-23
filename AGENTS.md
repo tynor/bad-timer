@@ -23,8 +23,11 @@ An isolated versioned in-memory JSON Lines history codec/replayer now validates
 start/stop/switch transitions and retains completed and unfinished sessions.
 Startup now opens/creates and exclusively locks a history file, replaying it before
 terminal setup. The default is `$HOME/Library/Application Support/bad-timer/history.jsonl`;
-`--history PATH` overrides it. Parent directories must exist. Transition writes,
-recovery prompts, full activity TUI, and CSV export are not implemented. Real Ghostty and macOS suspend-clock validation are pending.
+`--history PATH` overrides it. Parent directories must exist. An isolated
+`Store.append` API now validates, writes and syncs start/stop/switch transitions
+before committing logical state; write/sync failures block further appends until
+restart and preserve uncertain disk bytes. TUI transition wiring, recovery prompts,
+full activity TUI, and CSV export are not implemented. Real Ghostty and macOS suspend-clock validation are pending.
 Read `PLAN.md` for the approved MVP and defaults. Plan approval is not blanket
 implementation approval: propose each small implementation step and its acceptance
 checks, obtain explicit approval, implement only that step, then stop for review.
@@ -43,7 +46,7 @@ The approved requirements are not existing behavior.
 - `src/clock.zig`, `src/clock.h`: macOS monotonic/UTC clock acquisition and tests.
 - `src/config.zig`: owned JSON config parsing/loading, validation, numeric keys, and tests.
 - `src/history.zig`: owned in-memory event encoding/replay, strict validation, and tests.
-- `src/storage.zig`: history-file creation, lifetime locking, read-only replay, and tests.
+- `src/storage.zig`: history-file creation, lifetime locking, replay, durable append, and tests.
 - `PLAN.md`: approved scope, behavior, milestones, and acceptance checks.
 
 Preserve the package fingerprint in `build.zig.zon`. Do not edit generated

@@ -108,6 +108,37 @@ pub const History = struct {
         self.unfinished = null;
     }
 
+    /// Validate and reserve all resources before persistence. Does not change logical state.
+    /// Commit the returned event before preparing another; its start strings are owned here.
+    pub fn prepare(self: *History, event: Event) !Event {
+        try validate(event);
+        // Reuse replay's transition checks on a disposable, constant-size history.
+        var trial: History = .{
+            .arena = std.heap.ArenaAllocator.init(self.arena.child_allocator),
+            .unfinished = self.unfinished,
+            .last_session_id = self.last_session_id,
+        };
+        defer trial.deinit();
+        try trial.apply(event);
+        if (event.change != .start) try self.sessions.ensureUnusedCapacity(self.arena.allocator(), 1);
+        var owned = event;
+        const start: ?*Start = switch (owned.change) {
+            .start => |*start| start,
+            .switch_activity => |*change| &change.start,
+            .stop => null,
+        };
+        if (start) |s| {
+            s.activity.id = try self.arena.allocator().dupe(u8, s.activity.id);
+            s.activity.name = try self.arena.allocator().dupe(u8, s.activity.name);
+        }
+        return owned;
+    }
+
+    /// Only accepts an event returned by prepare, with no intervening state changes.
+    pub fn commit(self: *History, prepared: Event) void {
+        self.apply(prepared) catch unreachable; // prepare validated and reserved capacity.
+    }
+
     fn apply(self: *History, event: Event) !void {
         switch (event.change) {
             .start => |start| try self.begin(start),

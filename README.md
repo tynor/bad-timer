@@ -89,7 +89,7 @@ Tests cover UTC, pre-epoch time, local midnight, independent zones, invalid inpu
 and Los Angeles's 23-hour/25-hour days in 2024. Rules come from the installed
 macOS time-zone database and may change with OS updates.
 
-## In-memory history codec (not connected to storage)
+## In-memory history codec
 
 `src/history.zig` encodes version-1 JSON Lines events and replays them entirely
 in memory. `encode` returns an allocated LF-terminated record. Each event has
@@ -109,15 +109,15 @@ or removing configured activities cannot change these snapshots. Empty input
 is valid. Malformed JSON, unknown/duplicate/missing fields, unsupported versions,
 invalid identities/transitions, blank records, and a missing final LF reject the
 whole input. No records are skipped, repaired, or truncated. Encoding validates
-individual records; only replay checks them against preceding transitions.
+individual records; replay and append preparation also check preceding transitions.
 
 Tests cover round trips, escaped/Unicode names, ownership, atomic switches,
 unfinished sessions, backwards wall clocks, corruption, and invalid transitions.
-The codec itself performs no I/O. The storage loader below uses it at startup;
-transition writes and recovery prompts are not implemented. Replay currently retains the entire history in
+The codec itself performs no I/O. Storage uses it for startup replay and transition
+preparation. Recovery prompts are not implemented. Replay currently retains the entire history in
 memory; it does not stream or impose a file-size limit.
 
-## History file loading
+## History file loading and durable appends
 
 The default history path is `$HOME/Library/Application Support/bad-timer/history.jsonl`.
 Use `--history PATH` to override it (relative paths use the working directory).
@@ -137,11 +137,27 @@ can ignore advisory locks. Local macOS filesystems are the intended target.
 Corrupt or incomplete input aborts startup with its path and reason, without
 repair, truncation, or skipped records. Preserve the file for future recovery.
 Unfinished sessions are retained in memory but not resumed or resolved. No
-transitions are written yet, so timer controls remain disabled. Loading retains
+TUI transitions are written yet, so timer controls remain disabled. Loading retains
 the entire history in memory without a size limit. `Store.deinit` releases both
 the owned history and file lock; do not copy the owning store.
 
-Tests cover creation, lock release, replay across reopen, completed/unfinished
+`Store.append` validates a transition and reserves memory before writing one
+LF-terminated event at the tracked end of the locked file. It syncs the file
+before committing the in-memory state or returning success. Start, stop, and
+switch use the same path; a switch is one record. Callers must not mutate the
+store's history directly or write the file through another handle.
+
+Validation/allocation failures leave logical state and file contents unchanged.
+A write or sync failure leaves the previous logical state intact and blocks all
+further appends on that store (`HistoryWriteBlocked`). Report the original error
+as uncertain: part or all of the event may be on disk, even after a sync failure.
+Do not retry blindly. Close and reopen to replay what is present; incomplete or
+corrupt bytes still abort startup and must be preserved for future recovery.
+This is a storage API only; activity controls and recovery prompts remain disconnected.
+
+Tests cover durable start/switch/stop, rejected transitions without file changes,
+injected partial-write/sync failures, blocked retries, and restart uncertainty.
+Tests also cover creation, lock release, replay across reopen, completed/unfinished
 sessions, process exclusion, restrictive creation permissions, access errors,
 and preservation of corrupt bytes and terminal settings.
 
