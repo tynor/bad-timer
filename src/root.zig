@@ -2,10 +2,12 @@
 const std = @import("std");
 pub const time_zone = @import("time_zone.zig");
 pub const config = @import("config.zig");
+pub const clock = @import("clock.zig");
 
 test {
     _ = time_zone;
     _ = config;
+    _ = clock;
 }
 
 /// Strings are borrowed and must remain valid and unchanged while used by a timer or session.

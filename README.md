@@ -56,7 +56,27 @@ endpoints are retained unchanged, even if a clock correction puts the end before
 the start. Readings before the running session's monotonic start are rejected
 without changing state. Activity IDs/names are borrowed immutable strings that
 must outlive the timer and returned sessions. The caller retains completed
-sessions; the module performs no I/O or clock acquisition. Durability, totals, and UI integration remain separate work.
+sessions; the timer itself performs no I/O or clock acquisition. Durability, totals, and UI integration remain separate work.
+
+`src/clock.zig` provides `clock.now() !Instant` using macOS `clock_gettime`:
+`CLOCK_MONOTONIC_RAW` for elapsed nanoseconds and `CLOCK_REALTIME` for Unix UTC
+nanoseconds. The installed macOS manual documents RAW as unadjusted and
+suspend-inclusive (unlike `CLOCK_UPTIME_RAW`). These are sequential reads, not
+an atomic snapshot; scheduling delays can separate them. UTC remains reporting
+metadata and may jump without changing elapsed duration. OS read failures return
+`ClockReadFailed`; invalid or unrepresentable readings return
+`ClockReadingOutOfRange`. No fabricated reading or fallback clock is returned.
+The adapter is exported but is not yet called by the terminal executable.
+Tests cover nanosecond conversion, pre-epoch UTC, invalid readings, OS read
+failure, and feeding live readings into a timer.
+
+Manual suspend acceptance remains pending: in a temporary caller of
+`clock.now()`, record a reading before sleep and another after resume. Suspend
+the Mac for a measured interval (for example, at least 30 seconds), then check
+that the monotonic delta includes that interval rather than only awake time.
+Also compare with an awake-only interval. Do not change the system wall clock
+for this check. Record macOS version and measured deltas; the automated tests
+neither suspend the host nor prove real suspend behavior.
 
 `src/time_zone.zig` uses CoreFoundation's system IANA zone list and Gregorian
 calendar, without changing process-global `TZ`. Omitted zones default to `UTC`;
@@ -117,5 +137,5 @@ yet displayed or selectable.
 A real Ghostty smoke test is still required: run the app, press a key, resize
 (including a very small window), quit with `q`, repeat with Ctrl-C, and confirm
 the shell's echo, cursor, screen, and input work normally afterward. PTY checks
-do not establish visual correctness in Ghostty. Suspend/elapsed-clock behavior
-is not part of this foundation step and has not been tested.
+do not establish visual correctness in Ghostty. Real suspend/elapsed-clock behavior
+has not been manually tested; the isolated clock adapter does not establish it.

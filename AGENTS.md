@@ -17,6 +17,8 @@ with IANA validation, local dates, and UTC calendar-day boundaries; an isolated
 in-memory JSON activity-config parser with validation and ordered numeric keys.
 Config is loaded and validated from `$HOME/Library/Application Support/bad-timer/config.json`
 (or `--config PATH`) before terminal setup; activity controls and timer state remain disconnected.
+An isolated macOS clock adapter now returns timer readings using suspend-inclusive
+`CLOCK_MONOTONIC_RAW` and UTC `CLOCK_REALTIME`; it is not connected to the TUI.
 Persistence, full activity TUI, and CSV export are not implemented. Real Ghostty and macOS suspend-clock validation are pending.
 Read `PLAN.md` for the approved MVP and defaults. Plan approval is not blanket
 implementation approval: propose each small implementation step and its acceptance
@@ -33,6 +35,7 @@ The approved requirements are not existing behavior.
 - `README.md`: foundation usage, verification, and known limits.
 - `src/root.zig`: in-memory timer state, borrowed activity identity, and deterministic tests.
 - `src/time_zone.zig`, `src/time_zone.h`: macOS CoreFoundation zone/calendar helpers and tests.
+- `src/clock.zig`, `src/clock.h`: macOS monotonic/UTC clock acquisition and tests.
 - `src/config.zig`: owned JSON config parsing/loading, validation, numeric keys, and tests.
 - `PLAN.md`: approved scope, behavior, milestones, and acceptance checks.
 
@@ -56,8 +59,8 @@ python3 tests/terminal_smoke.py
 Baseline verified with Zig `0.17.1`: `zig build`, `zig build test`,
 `zig fmt --check build.zig src`, and `zig build -Doptimize=ReleaseSmall` all passed.
 `zig build run` was not checked. The same checks also pass with the isolated timer
-state module; tests cover transitions and injected-clock behavior, not real clock
-acquisition or suspend behavior. The initial nono launcher denial is resolved.
+state module. Clock-adapter tests also cover real clock acquisition; real suspend
+behavior remains unverified. The initial nono launcher denial is resolved.
 Do not work around future sandbox restrictions; diagnose and request an explicit grant.
 
 ## Implementation principles

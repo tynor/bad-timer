@@ -41,6 +41,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
+    const clock_c = b.addTranslateC(.{
+        .root_source_file = b.path("src/clock.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    mod.addImport("clock_c", clock_c.createModule());
+
     const time_zone_c = b.addTranslateC(.{
         .root_source_file = b.path("src/time_zone.h"),
         .target = target,
