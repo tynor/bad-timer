@@ -19,7 +19,7 @@ pub fn main(init: std.process.Init) void {
     run(init) catch |err| {
         std.debug.print("bad_timer: {s}\n", .{@errorName(err)});
         if (err == error.InvalidArguments)
-            std.debug.print("usage: bad_timer [--config PATH] [--history PATH]\n", .{});
+            std.debug.print("usage: bad_timer [--config PATH] [--history PATH]\n       bad_timer --recover-history SOURCE DESTINATION\n", .{});
         std.process.exit(1);
     };
 }
@@ -66,7 +66,55 @@ fn resolvePath(allocator: std.mem.Allocator, override: ?[]const u8, filename: []
     return std.fs.path.join(allocator, &.{ std.mem.span(home), "Library/Application Support/bad-timer", filename });
 }
 
+// Recovery deliberately bypasses config loading and all raw/alternate-screen setup.
+fn recoverHistory(init: std.process.Init) !bool {
+    var args = init.minimal.args.iterate();
+    _ = args.skip();
+    const flag = args.next() orelse return false;
+    if (!std.mem.eql(u8, flag, "--recover-history")) return false;
+    const source = args.next() orelse return error.InvalidArguments;
+    const destination = args.next() orelse return error.InvalidArguments;
+    if (source.len == 0 or destination.len == 0 or
+        std.mem.startsWith(u8, source, "--") or std.mem.startsWith(u8, destination, "--") or args.next() != null)
+        return error.InvalidArguments;
+    if (builtin.os.tag != .macos) return error.RequiresMacOS;
+    if (c.isatty(c.STDIN_FILENO) != 1) return error.RequiresInteractiveTTY;
+    try output("Incomplete-tail recovery\nSource (kept as backup): ");
+    try activityName(source);
+    try output("\nNew destination: ");
+    try activityName(destination);
+    try output("\nWARNING: all bytes after the last LF will be omitted, even valid JSON.\nThey may contain a real time transition; this is not lossless repair.\nComplete-record corruption is rejected. Neither file will be activated automatically.\nKeep the original source. Type yes and Enter to create the separate file; anything else cancels: ");
+    var answer: [4]u8 = undefined;
+    var length: usize = 0;
+    while (length < answer.len) {
+        const n = c.read(c.STDIN_FILENO, answer[length..].ptr, 1);
+        if (n < 0) {
+            if (c.__error().* == c.EINTR) continue;
+            return error.TerminalReadFailed;
+        }
+        if (n == 0) break;
+        length += 1;
+        if (answer[length - 1] == '\n') break;
+    }
+    if (!std.mem.eql(u8, answer[0..length], "yes\n")) {
+        try output("Cancelled; no files changed.\n");
+        return true;
+    }
+    const report = timer.history_recovery.recover(init.gpa, init.io, .cwd(), source, destination) catch |err| {
+        std.debug.print("bad_timer: recovery failed: {s}; preserve the source and inspect the destination before retrying; no history was activated\n", .{@errorName(err)});
+        return error.HistoryRecoveryFailed;
+    };
+    var buffer: [256]u8 = undefined;
+    try output(try std.fmt.bufPrint(&buffer, "Published separate history: retained {d} bytes; omitted {d} uncertain bytes; completed sessions: {d}.\n", .{ report.retained_bytes, report.omitted_bytes, report.completed_sessions }));
+    if (report.unfinished_session_id) |id| {
+        try output(try std.fmt.bufPrint(&buffer, "Unfinished session {d}: still requires explicit end-time/duration/discard recovery.\n", .{id}));
+    } else try output("No unfinished session remains in the retained prefix.\n");
+    try output("Source preserved as backup; keep it. Neither file was activated automatically.\n");
+    return true;
+}
+
 fn run(init: std.process.Init) !void {
+    if (try recoverHistory(init)) return;
     const allocator = init.gpa;
     const locations = try paths(init);
     defer allocator.free(locations.config);

@@ -16,7 +16,7 @@ pub const Report = struct {
 /// remains the backup; callers must preserve it and surface the report's uncertainty.
 /// Parent directories must exist. Directory metadata is not synced; temporary-file
 /// cleanup is best effort. Reads the whole source into memory, like Store.open.
-/// No startup integration or automatic replacement of the active history.
+/// Normal timer startup never invokes this automatically or replaces active history.
 pub fn recover(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, source_path: []const u8, destination_path: []const u8) !Report {
     return recoverWith(allocator, io, dir, source_path, destination_path, FileSink{});
 }

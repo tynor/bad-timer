@@ -74,7 +74,12 @@ file, reporting omitted tail bytes and retained completed/unfinished sessions.
 The source stays untouched as the backup. Complete-record corruption is rejected;
 even valid JSON missing LF is uncertain and omitted only with explicit caller
 authorization. Tests cover partial tails, preservation, lock/publication conflicts,
-and write/sync failures. No CLI/startup integration exists yet.
+and write/sync failures. An explicit `--recover-history SOURCE DESTINATION` command
+now exposes this API before config/TUI setup, requiring interactive stdin and an
+exact `yes` line after an uncertainty warning. It reports retained/omitted bytes
+and unfinished status without activating either file. PTY tests cover confirmation,
+cancellation/EOF/Ctrl-C, argument validation, corruption/conflicts/write failure,
+and source/terminal preservation. Normal startup still never auto-repairs history.
 A repeatable `tests/resource_check.py` now checks ReleaseSmall binary size,
 short-session history growth, and unchanged history content/mtime during stopped
 and running no-input windows. CPU/RSS checks were skipped at user request after

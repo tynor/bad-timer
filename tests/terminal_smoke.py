@@ -60,6 +60,87 @@ def launch(output=None, args=(), env=ENV, file_size_limit=None, cwd=None):
     return process, master, slave, original
 
 
+# Explicit tail recovery bypasses HOME/config/TERM and never enters raw/alternate mode.
+with tempfile.TemporaryDirectory(prefix="bad-timer-recovery-cli-") as directory:
+    source = Path(directory) / "source.jsonl"
+    destination = Path(directory) / "destination.jsonl"
+    activity = {"id": "removed", "name": "Historical"}
+    prefix = (json.dumps({"version": 1, "change": {"start": {
+        "session_id": 7, "activity": activity, "start_utc_ns": 100,
+    }}}) + "\n").encode()
+    stop = (json.dumps({"version": 1, "change": {"stop": {
+        "session_id": 7, "activity": activity, "end_utc_ns": 200, "duration_ns": 100,
+    }}}) + "\n").encode()
+    recovery_env = dict(ENV, TERM="dumb")
+    recovery_env.pop("HOME", None)
+    for case in ("cancel", "overlong", "eof", "interrupt", "save", "completed", "corrupt", "transition", "existing", "complete", "write_failure"):
+        print("recovery CLI", case, flush=True)
+        content = prefix + (stop if case == "completed" else b"") + b"partial"
+        if case == "corrupt":
+            content = b"{bad}\npartial"
+        elif case == "transition":
+            content = stop + b"partial"
+        elif case == "complete":
+            content = prefix
+        source.write_bytes(content)
+        destination.unlink(missing_ok=True)
+        if case == "existing":
+            destination.write_bytes(b"keep")
+        before = source.stat().st_mtime_ns
+        process, master, slave, original = launch(
+            args=("--recover-history", str(source), str(destination)), env=recovery_env,
+            file_size_limit=0 if case == "write_failure" else None,
+        )
+        try:
+            screen = receive(master, b"anything else cancels: ")
+            assert b"not lossless repair" in screen and b"\x1b[" not in screen
+            assert not destination.exists() or case == "existing"
+            assert termios.tcgetattr(master) == original
+            if case == "interrupt":
+                os.write(master, b"\x03")
+                receive(master, b"^C")
+                assert process.wait(timeout=5) == -signal.SIGINT
+            else:
+                os.write(master, {"cancel": b"no\n", "overlong": b"yesplease\n", "eof": b"\x04"}.get(case, b"yes\n"))
+                if case in ("cancel", "overlong", "eof"):
+                    receive(master, b"Cancelled; no files changed.")
+                    assert process.wait(timeout=5) == 0
+                elif case in ("save", "completed"):
+                    result = receive(master, b"Neither file was activated automatically.")
+                    expected = prefix + (stop if case == "completed" else b"")
+                    assert destination.read_bytes() == expected
+                    assert f"retained {len(expected)} bytes; omitted 7 uncertain bytes".encode() in result
+                    assert (b"Unfinished session 7" if case == "save" else b"No unfinished session") in result
+                    assert process.wait(timeout=5) == 0
+                else:
+                    # Drain canonical echo before waiting: macOS may drain PTY output on exit.
+                    receive(master, b"yes\r\n")
+                    stderr = process.stderr.read()
+                    assert process.wait(timeout=5) == 1, stderr
+                    assert b"recovery failed:" in stderr
+            assert source.read_bytes() == content and source.stat().st_mtime_ns == before
+            assert termios.tcgetattr(master) == original
+            if case == "existing":
+                assert destination.read_bytes() == b"keep"
+            elif case not in ("save", "completed"):
+                assert not destination.exists()
+            assert set(Path(directory).iterdir()) == {source} | ({destination} if destination.exists() else set())
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            os.close(master)
+            os.close(slave)
+    for args in (("--recover-history",), ("--recover-history", str(source)),
+                 ("--recover-history", "", str(destination)),
+                 ("--recover-history", str(source), str(destination), "extra"),
+                 ("--recover-history", "--config", str(destination))):
+        result = subprocess.run([EXE, *args], input=b"yes\n", capture_output=True, env=recovery_env, timeout=5)
+        assert result.returncode == 1 and b"usage:" in result.stderr
+    result = subprocess.run([EXE, "--recover-history", str(source), str(destination)], input=b"yes\n", capture_output=True, env=recovery_env, timeout=5)
+    assert result.returncode == 1 and b"RequiresInteractiveTTY" in result.stderr
+    assert not destination.exists()
+
 # Configured-zone totals include removed activities, exclude yesterday, and survive restart.
 with tempfile.TemporaryDirectory(prefix="bad-timer-totals-") as directory:
     history = Path(directory) / "history.jsonl"

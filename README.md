@@ -74,7 +74,7 @@ Measured on Apple M1 Max (arm64), macOS 27.2.1, Zig 0.17.1, ReleaseSmall:
 
 | Measurement | Result |
 | --- | ---: |
-| Executable size | 261,352 bytes |
+| Executable size (including recovery CLI) | 278,040 bytes |
 | Empty history | 0 bytes |
 | After start | 124 bytes |
 | After switch | 391 bytes |
@@ -160,12 +160,30 @@ refreshing on live elapsed seconds, transitions, and local-day changes. Stopped,
 unchanged screens do not redraw each second. PTY checks cover live updates,
 restart, removed activities, configured-zone attribution, and small-screen resize.
 
-## Isolated incomplete-tail recovery API
+## Explicit incomplete-tail recovery
 
-`src/history_recovery.zig` exposes
-`recover(allocator, io, dir, source_path, destination_path) !Report`. This is a
-module API only: normal startup still rejects incomplete/corrupt history. There
-is no recovery command, prompt, or automatic replacement of the active history.
+Normal startup still rejects incomplete/corrupt history. To create a separate
+recovered file, run:
+
+```sh
+./zig-out/bin/bad_timer --recover-history SOURCE DESTINATION
+```
+
+This macOS command requires interactive stdin but not Ghostty, config, or `HOME`.
+It does not enter raw mode or an alternate screen. It warns that trailing bytes
+may contain a real time transition, then requires exactly `yes` followed by Enter.
+Anything else, EOF, or interruption before confirmation leaves files unchanged.
+Arguments cannot be combined with `--config`/`--history` or other options.
+
+Success reports retained bytes, omitted uncertain bytes, completed-session count,
+and unfinished-session status. Neither file is activated or replaced. Keep the
+original backup and review the result before explicitly choosing the new history
+with `--history DESTINATION`. A failed command reports an error; preserve the
+source and inspect the destination before retrying, especially after interruption.
+Publication does not guarantee directory-metadata durability across power loss.
+
+The command calls `src/history_recovery.zig`'s
+`recover(allocator, io, dir, source_path, destination_path) !Report` API.
 
 Call only after explicit authorization to omit the trailing bytes. The API opens
 an existing source read-only, takes the same exclusive cooperative file lock as
@@ -193,6 +211,9 @@ Tests cover every nonempty partial-stop tail (including JSON missing only LF),
 completed/unfinished/empty prefixes, complete-record corruption, invalid
 transitions, locking, missing sources, existing destinations, and injected partial
 write/sync failures. They check exact source preservation and unpublished-file cleanup.
+PTY tests also cover CLI confirmation, cancellation/EOF/Ctrl-C, argument validation,
+non-interactive rejection, completed/unfinished reports, corruption, conflicts,
+write failure, unchanged source content/mtime, and unchanged terminal modes.
 
 ## CSV encoding and file publishing
 
@@ -331,8 +352,9 @@ A write or sync failure leaves the previous logical state intact and blocks all
 further appends on that store (`HistoryWriteBlocked`). Report the original error
 as uncertain: part or all of the event may be on disk, even after a sync failure.
 Do not retry blindly. Close and reopen to replay what is present; incomplete or
-corrupt bytes still abort startup and must be preserved. The isolated recovery API
-below is not yet available through startup or the CLI.
+corrupt bytes still abort startup and must be preserved. Use the explicit
+`--recover-history SOURCE DESTINATION` command described above for an incomplete
+tail; normal startup never automatically repairs or replaces history.
 The recovery prompt exits on append failure with the history path and an uncertainty
 warning; it does not retry or claim recovery succeeded. Numeric controls use the same fail-closed policy.
 
