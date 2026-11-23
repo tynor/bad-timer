@@ -15,8 +15,9 @@ handling, and cleanup; an isolated in-memory timer state module with injected
 clock readings and deterministic tests; an isolated CoreFoundation time-zone helper
 with IANA validation, local dates, and UTC calendar-day boundaries; an isolated
 in-memory JSON activity-config parser with validation and ordered numeric keys.
-These modules are not connected to the terminal. Config file loading, persistence,
-full activity TUI, and CSV export are not implemented. Real Ghostty and macOS suspend-clock validation are pending.
+Config is loaded and validated from `$HOME/Library/Application Support/bad-timer/config.json`
+(or `--config PATH`) before terminal setup; activity controls and timer state remain disconnected.
+Persistence, full activity TUI, and CSV export are not implemented. Real Ghostty and macOS suspend-clock validation are pending.
 Read `PLAN.md` for the approved MVP and defaults. Plan approval is not blanket
 implementation approval: propose each small implementation step and its acceptance
 checks, obtain explicit approval, implement only that step, then stop for review.
@@ -32,7 +33,7 @@ The approved requirements are not existing behavior.
 - `README.md`: foundation usage, verification, and known limits.
 - `src/root.zig`: in-memory timer state, borrowed activity identity, and deterministic tests.
 - `src/time_zone.zig`, `src/time_zone.h`: macOS CoreFoundation zone/calendar helpers and tests.
-- `src/config.zig`: owned in-memory JSON config parsing, validation, numeric keys, and tests.
+- `src/config.zig`: owned JSON config parsing/loading, validation, numeric keys, and tests.
 - `PLAN.md`: approved scope, behavior, milestones, and acceptance checks.
 
 Preserve the package fingerprint in `build.zig.zon`. Do not edit generated

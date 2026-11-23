@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const c = @import("terminal_c");
+const Config = @import("bad_timer").config.Config;
 
 var stopping = std.atomic.Value(bool).init(false);
 var resized = std.atomic.Value(bool).init(false);
@@ -9,9 +10,11 @@ fn onSignal(sig: c_int) callconv(.c) void {
     if (sig == c.SIGWINCH) resized.store(true, .monotonic) else stopping.store(true, .monotonic);
 }
 
-pub fn main() void {
-    run() catch |err| {
+pub fn main(init: std.process.Init) void {
+    run(init) catch |err| {
         std.debug.print("bad_timer: {s}\n", .{@errorName(err)});
+        if (err == error.InvalidArguments)
+            std.debug.print("usage: bad_timer [--config PATH]\n", .{});
         std.process.exit(1);
     };
 }
@@ -29,12 +32,36 @@ fn output(text: []const u8) !void {
     }
 }
 
-fn run() !void {
+fn configPath(init: std.process.Init) ![]u8 {
+    var args = init.minimal.args.iterate();
+    _ = args.skip();
+    if (args.next()) |flag| {
+        if (!std.mem.eql(u8, flag, "--config")) return error.InvalidArguments;
+        const path = args.next() orelse return error.InvalidArguments;
+        if (path.len == 0 or std.mem.startsWith(u8, path, "--") or args.next() != null)
+            return error.InvalidArguments;
+        return init.gpa.dupe(u8, path);
+    }
+    const home = c.getenv("HOME") orelse return error.MissingHomeDirectory;
+    if (!std.fs.path.isAbsolute(std.mem.span(home))) return error.InvalidHomeDirectory;
+    return std.fs.path.join(init.gpa, &.{ std.mem.span(home), "Library/Application Support/bad-timer/config.json" });
+}
+
+fn run(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const config_path = try configPath(init);
+    defer allocator.free(config_path);
     if (builtin.os.tag != .macos) return error.RequiresMacOS;
     if (c.isatty(c.STDIN_FILENO) != 1 or c.isatty(c.STDOUT_FILENO) != 1)
         return error.RequiresInteractiveTTY;
     const term = c.getenv("TERM") orelse return error.RequiresGhostty;
     if (!std.mem.eql(u8, std.mem.span(term), "xterm-ghostty")) return error.RequiresGhostty;
+
+    var config = Config.load(allocator, init.io, config_path) catch |err| {
+        std.debug.print("bad_timer: cannot load config at {s}: {s}; create or fix this JSON file (see README.md)\n", .{ config_path, @errorName(err) });
+        return error.ConfigLoadFailed;
+    };
+    defer config.deinit();
 
     var original: c.struct_termios = undefined;
     if (c.tcgetattr(c.STDIN_FILENO, &original) != 0) return error.TerminalSetupFailed;

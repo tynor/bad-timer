@@ -9,9 +9,16 @@ import struct
 import subprocess
 import termios
 import time
+import tempfile
+from pathlib import Path
 
 EXE = "./zig-out/bin/bad_timer"
-ENV = dict(os.environ, TERM="xterm-ghostty")
+HOME = tempfile.TemporaryDirectory(prefix="bad-timer-test-")
+ENV = dict(os.environ, TERM="xterm-ghostty", HOME=HOME.name)
+CONFIG = Path(HOME.name) / "Library/Application Support/bad-timer/config.json"
+CONFIG.parent.mkdir(parents=True)
+VALID_CONFIG = b'{"activities":[{"id":"work","name":"Work"}]}'
+CONFIG.write_bytes(VALID_CONFIG)
 
 
 def receive(fd, needle):
@@ -29,7 +36,7 @@ def receive(fd, needle):
     return data
 
 
-def launch(output=None):
+def launch(output=None, args=(), env=ENV):
     master, slave = pty.openpty()
     original = termios.tcgetattr(slave)
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
@@ -39,11 +46,92 @@ def launch(output=None):
         fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
     process = subprocess.Popen(
-        [EXE], stdin=slave, stdout=slave if output is None else output,
-        stderr=subprocess.PIPE, env=ENV, preexec_fn=controlling_terminal,
+        [EXE, *args], stdin=slave, stdout=slave if output is None else output,
+        stderr=subprocess.PIPE, env=env, preexec_fn=controlling_terminal,
     )
     return process, master, slave, original
 
+
+# Overrides work without HOME and take precedence over the default config.
+override = Path(HOME.name) / "custom config.json"
+override.write_bytes(VALID_CONFIG)
+without_home = dict(ENV)
+without_home.pop("HOME", None)
+for path in (str(override), os.path.relpath(override)):
+    process, master, slave, original = launch(args=("--config", path), env=without_home)
+    try:
+        receive(master, b"No timer or storage yet.")
+        os.write(master, b"q")
+        receive(master, b"\x1b[?25h\x1b[?1049l")
+        assert process.wait(timeout=5) == 0, process.stderr.read()
+        assert termios.tcgetattr(master) == original
+    finally:
+        os.close(master)
+        os.close(slave)
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+for args, expected in (
+    (("--config",), b"usage:"),
+    (("--config", ""), b"usage:"),
+    (("--unknown",), b"usage:"),
+    (("--config", str(override), "--config", str(override)), b"usage:"),
+    (("--config", "--config"), b"usage:"),
+    (("--config", str(override) + ".missing"), b"FileNotFound"),
+):
+    process, master, slave, original = launch(args=args)
+    try:
+        assert process.wait(timeout=5) == 1
+        diagnostic = process.stderr.read()
+        assert expected in diagnostic, diagnostic
+        assert termios.tcgetattr(master) == original
+    finally:
+        os.close(master)
+        os.close(slave)
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+assert override.read_bytes() == VALID_CONFIG
+
+# Config failures must happen before raw mode or alternate-screen entry.
+for contents, mode, expected in (
+    (None, 0o600, b"FileNotFound"),
+    (b"{", 0o600, b"cannot load config"),
+    (b'{"activities":[]}', 0o600, b"NoActivities"),
+    (VALID_CONFIG, 0o000, b"AccessDenied"),
+    (b" " * (1024 * 1024 + 1), 0o600, b"StreamTooLong"),
+):
+    CONFIG.unlink(missing_ok=True)
+    if contents is not None:
+        CONFIG.write_bytes(contents)
+        CONFIG.chmod(mode)
+    process, master, slave, original = launch()
+    try:
+        assert process.wait(timeout=5) == 1
+        diagnostic = process.stderr.read()
+        assert expected in diagnostic, diagnostic
+        assert str(CONFIG).encode() in diagnostic, diagnostic
+        assert termios.tcgetattr(master) == original
+        if select.select([master], [], [], 0.1)[0]:
+            try:
+                assert os.read(master, 8192) == b"", "output before config validation"
+            except OSError as error:
+                assert error.errno == errno.EIO
+        if contents is None:
+            assert not CONFIG.exists()
+        else:
+            CONFIG.chmod(0o600)
+            assert CONFIG.read_bytes() == contents, "config was modified"
+    finally:
+        if CONFIG.exists():
+            CONFIG.chmod(0o600)
+        os.close(master)
+        os.close(slave)
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+CONFIG.write_bytes(VALID_CONFIG)
 
 for exit_key in (b"q", b"\x03", signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
     print("checking", repr(exit_key), flush=True)
@@ -99,4 +187,5 @@ try:
 finally:
     os.close(master)
     os.close(slave)
+HOME.cleanup()
 print("terminal smoke checks passed")

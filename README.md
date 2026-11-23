@@ -1,11 +1,11 @@
 # bad-timer
 
 A keyboard-driven workday timer, currently at the terminal-foundation stage.
-**Interactive activity tracking, config file loading, storage, and CSV export are not implemented.**
+**Interactive activity tracking, storage, and CSV export are not implemented.**
 An isolated in-memory timer state module is implemented and tested; it is not yet
 connected to the terminal. An isolated macOS time-zone helper is also implemented
-and tested. An isolated JSON config parser is implemented and tested; config file
-loading and daily totals are not yet wired up.
+and tested. JSON config is loaded and validated at startup; daily totals and
+activity controls are not yet wired up.
 See `PLAN.md` for approved scope and the per-step review gate.
 
 ## Build and run
@@ -15,10 +15,15 @@ Requires macOS, Zig **0.17.1**, and Ghostty with its default
 requires both stdin and stdout to be TTYs and checks `TERM`; this is a capability
 marker, not proof that the terminal actually is Ghostty.
 
+Before running, create `$HOME/Library/Application Support/bad-timer/config.json`
+using the example below, or pass `--config PATH`. The app does not create a default config.
+
 ```sh
 zig build
 zig build run
-# Or run ./zig-out/bin/bad_timer directly in Ghostty.
+# Or use a different config:
+zig build run -- --config ./activities.json
+# Or run ./zig-out/bin/bad_timer --config ./activities.json in Ghostty.
 zig build test
 zig fmt --check build.zig src
 zig build -Doptimize=ReleaseSmall
@@ -64,9 +69,20 @@ Tests cover UTC, pre-epoch time, local midnight, independent zones, invalid inpu
 and Los Angeles's 23-hour/25-hour days in 2024. Rules come from the installed
 macOS time-zone database and may change with OS updates.
 
-## In-memory configuration
+## Configuration
 
-`src/config.zig` parses this JSON shape (the executable does not load it yet):
+The executable reads `$HOME/Library/Application Support/bad-timer/config.json`
+by default. Use `--config PATH` to load a different file; relative paths resolve
+from the working directory. An override does not require `HOME`, and a failed
+override never falls back to the default. Repeat flags, unknown arguments, and
+missing or empty paths are rejected with usage guidance.
+
+The file is read once at startup, after checking the terminal but before changing
+terminal state. Without an override, `HOME` must be an absolute path. Missing, unreadable, oversized (over 1 MiB), or
+invalid files cause an error with the path and reason. No file or directory is
+created or modified. Fix the file and restart; there is no live reload.
+
+`src/config.zig` parses this JSON shape:
 
 ```json
 {
@@ -89,8 +105,14 @@ in order without numeric keys for the future menu. Reordering never changes IDs.
 `Config.parse` owns its strings independently of the input buffer. Call `deinit`
 once and do not copy the owning config. Activities borrowed by timers or sessions
 must not outlive it. Tests cover ownership, validation failures, default/explicit
-zones, and key assignment with fewer and more than nine activities. No config
-file location, filesystem I/O, or startup behavior is introduced by this step.
+zones, and key assignment with fewer and more than nine activities. `Config.load`
+reads a file using the same parser and returns the same owned configuration.
+The PTY smoke tests use a temporary home and cover successful startup plus missing,
+unreadable, malformed, invalid, and oversized config failures, checking that errors
+leave terminal settings and file contents unchanged. They also cover absolute and
+relative config overrides without `HOME`, override failures, and invalid arguments.
+The loaded activities are not
+yet displayed or selectable.
 
 A real Ghostty smoke test is still required: run the app, press a key, resize
 (including a very small window), quit with `q`, repeat with Ctrl-C, and confirm

@@ -1,4 +1,4 @@
-//! In-memory JSON configuration; no file loading or terminal integration.
+//! Owned JSON configuration, loaded from a file or parsed in memory.
 const std = @import("std");
 const Activity = @import("root.zig").Activity;
 const Zone = @import("time_zone.zig").Zone;
@@ -11,6 +11,13 @@ const Document = struct {
 /// Owns parsed strings and activities. Do not copy; borrowed values live until deinit.
 pub const Config = struct {
     parsed: std.json.Parsed(Document),
+
+    /// Reads only; never creates or modifies the config file.
+    pub fn load(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Config {
+        const source = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024));
+        defer allocator.free(source);
+        return parse(allocator, source);
+    }
 
     /// Copies input strings, so the caller may release the source after parsing.
     pub fn parse(allocator: std.mem.Allocator, source: []const u8) !Config {
