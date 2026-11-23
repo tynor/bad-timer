@@ -19,7 +19,9 @@ Config is loaded and validated from `$HOME/Library/Application Support/bad-timer
 (or `--config PATH`) before terminal setup; activity controls and timer state remain disconnected.
 An isolated macOS clock adapter now returns timer readings using suspend-inclusive
 `CLOCK_MONOTONIC_RAW` and UTC `CLOCK_REALTIME`; it is not connected to the TUI.
-Persistence, full activity TUI, and CSV export are not implemented. Real Ghostty and macOS suspend-clock validation are pending.
+An isolated versioned in-memory JSON Lines history codec/replayer now validates
+start/stop/switch transitions and retains completed and unfinished sessions.
+Disk persistence, full activity TUI, and CSV export are not implemented. Real Ghostty and macOS suspend-clock validation are pending.
 Read `PLAN.md` for the approved MVP and defaults. Plan approval is not blanket
 implementation approval: propose each small implementation step and its acceptance
 checks, obtain explicit approval, implement only that step, then stop for review.
@@ -37,6 +39,7 @@ The approved requirements are not existing behavior.
 - `src/time_zone.zig`, `src/time_zone.h`: macOS CoreFoundation zone/calendar helpers and tests.
 - `src/clock.zig`, `src/clock.h`: macOS monotonic/UTC clock acquisition and tests.
 - `src/config.zig`: owned JSON config parsing/loading, validation, numeric keys, and tests.
+- `src/history.zig`: owned in-memory event encoding/replay, strict validation, and tests.
 - `PLAN.md`: approved scope, behavior, milestones, and acceptance checks.
 
 Preserve the package fingerprint in `build.zig.zon`. Do not edit generated

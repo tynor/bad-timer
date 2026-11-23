@@ -89,6 +89,34 @@ Tests cover UTC, pre-epoch time, local midnight, independent zones, invalid inpu
 and Los Angeles's 23-hour/25-hour days in 2024. Rules come from the installed
 macOS time-zone database and may change with OS updates.
 
+## In-memory history codec (not connected to storage)
+
+`src/history.zig` encodes version-1 JSON Lines events and replays them entirely
+in memory. `encode` returns an allocated LF-terminated record. Each event has
+required `version` and `change` fields; `change` contains exactly one `start`,
+`stop`, or `switch_activity` value. Starts carry a positive, strictly increasing
+`session_id`, an activity ID/name snapshot, and `start_utc_ns`. Stops carry the
+same session ID and activity snapshot, `end_utc_ns`, and `duration_ns`. A switch
+contains both stop and start, with matching UTC boundary and different activity
+IDs. UTC timestamps are signed integer Unix nanoseconds; durations are unsigned
+monotonic elapsed nanoseconds, not computed from UTC endpoints. Backwards UTC
+is allowed. Session IDs cannot be reused, including after a stop.
+
+`History.replay` owns its strings and completed sessions independently of the
+input or current config; call `deinit` once and do not copy it. `unfinished`
+retains a final unmatched start without creating a completed session. Renaming
+or removing configured activities cannot change these snapshots. Empty input
+is valid. Malformed JSON, unknown/duplicate/missing fields, unsupported versions,
+invalid identities/transitions, blank records, and a missing final LF reject the
+whole input. No records are skipped, repaired, or truncated. Encoding validates
+individual records; only replay checks them against preceding transitions.
+
+Tests cover round trips, escaped/Unicode names, ownership, atomic switches,
+unfinished sessions, backwards wall clocks, corruption, and invalid transitions.
+This is not durable storage: there are no history files, locks, writes, recovery
+prompts, or TUI integration yet. Replay currently retains the entire history in
+memory; it does not stream or impose a file-size limit.
+
 ## Configuration
 
 The executable reads `$HOME/Library/Application Support/bad-timer/config.json`
