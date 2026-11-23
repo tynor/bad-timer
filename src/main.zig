@@ -137,6 +137,9 @@ fn run(init: std.process.Init) !void {
     var last_second: u64 = 0;
     var last_key: ?u8 = null;
     var menu: ?usize = null;
+    var export_number: u64 = 1;
+    var status_buffer: [256]u8 = undefined;
+    var status: []const u8 = "";
     var dirty = true;
     while (!stopping.load(.monotonic)) {
         if (resized.swap(false, .monotonic)) dirty = true;
@@ -166,7 +169,7 @@ fn run(init: std.process.Init) !void {
             } else if (menu) |selected| {
                 try drawMenu(config, selected);
             } else {
-                try draw(last_key, config, live, second);
+                try draw(last_key, config, live, second, status);
             }
             dirty = false;
         }
@@ -269,6 +272,15 @@ fn run(init: std.process.Init) !void {
             _ = try escapeKey();
             continue;
         }
+        if (key == 'e') {
+            var path_buffer: [80]u8 = undefined;
+            const path = exportReport(allocator, init.io, store.history.sessions.items, &export_number, &path_buffer) catch |err| {
+                status = try std.fmt.bufPrint(&status_buffer, "Export failed: {s}; check current directory permissions and disk space; history unchanged.", .{@errorName(err)});
+                dirty = true;
+                continue;
+            };
+            status = try std.fmt.bufPrint(&status_buffer, "Exported completed sessions to ./{s}", .{path});
+        }
         if (key == 'a') menu = 0;
         if (key >= '1' and key <= '9') {
             const index: usize = key - '1';
@@ -279,6 +291,20 @@ fn run(init: std.process.Init) !void {
         dirty = true;
     }
     if (live.running != null) try transition(&live, &store, init.io, null, locations.history);
+}
+
+fn exportReport(allocator: std.mem.Allocator, io: std.Io, sessions: []const timer.Session, number: *u64, buffer: []u8) ![]const u8 {
+    while (true) {
+        const path = try std.fmt.bufPrint(buffer, "bad-timer-{d}.csv", .{number.*});
+        timer.csv.publish(allocator, io, .cwd(), path, sessions) catch |err| {
+            if (err == error.PathAlreadyExists) {
+                number.* = try std.math.add(u64, number.*, 1);
+                continue;
+            }
+            return err;
+        };
+        return path;
+    }
 }
 
 fn transition(live: *timer.Timer, store: *timer.storage.Store, io: std.Io, activity: ?timer.Activity, path: []const u8) !void {
@@ -364,7 +390,7 @@ fn activityName(name: []const u8) !void {
     }
 }
 
-fn draw(key: ?u8, config: Config, live: timer.Timer, seconds: u64) !void {
+fn draw(key: ?u8, config: Config, live: timer.Timer, seconds: u64, status: []const u8) !void {
     var size: c.struct_winsize = std.mem.zeroes(c.struct_winsize);
     if (c.ioctl(c.STDOUT_FILENO, c.TIOCGWINSZ, &size) != 0) return error.TerminalSizeFailed;
     var buffer: [256]u8 = undefined;
@@ -373,7 +399,11 @@ fn draw(key: ?u8, config: Config, live: timer.Timer, seconds: u64) !void {
     try output(if (live.running != null) "Active: " else "Stopped");
     if (live.running) |running| try activityName(running.activity.name);
     try output("\r\n");
-    try output("a: activity menu\r\n");
+    try output("a: activity menu | e: export completed sessions\r\n");
+    if (status.len != 0) {
+        try output(status);
+        try output("\r\n");
+    }
     for (config.activities(), 0..) |activity, index| {
         if (config.numericKey(index)) |key_byte| {
             try output(&.{ key_byte, ':', ' ' });

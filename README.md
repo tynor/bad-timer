@@ -7,8 +7,8 @@ activity, and monotonic elapsed seconds. Transitions are synced before display.
 Press `a` for a scrolling menu of all activities, including those beyond nine.
 Up/Down moves, Enter selects (with the same start/stop/switch behavior), and
 Escape cancels without changing timing. Tracking continues while the menu is open.
-**Daily totals and user-facing CSV export are not implemented.** An isolated
-CSV encoder and safe report-file publisher are available; the `e` key is not yet wired up.
+Press `e` outside the menu to export completed sessions as CSV (details below).
+**Daily totals are not implemented.**
 See `PLAN.md` for approved scope and the per-step review gate.
 
 ## Build and run
@@ -98,6 +98,15 @@ and Los Angeles's 23-hour/25-hour days in 2024. Rules come from the installed
 macOS time-zone database and may change with OS updates.
 
 ## CSV encoding and file publishing
+
+Press `e` outside the activity menu to export all completed sessions to the
+current working directory. Reports are named `bad-timer-1.csv`, `bad-timer-2.csv`,
+etc.; existing destinations are skipped, never replaced. The screen shows the
+relative report path on success, or an error on failure without exiting.
+Export does not stop or switch a running timer, and never changes history.
+Stop/switch first to include the current session. Empty history exports only the
+header. Export errors may require fixing directory permissions or freeing disk
+space before pressing `e` again.
 
 `bad_timer.csv.encode(allocator, sessions)` in `src/export.zig` returns owned CSV
 bytes for completed sessions in input order; the caller frees the result. It does

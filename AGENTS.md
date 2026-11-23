@@ -53,8 +53,12 @@ nanosecond timestamps/durations, CSV text escaping, and spreadsheet-formula
 neutralization. Its `publish` API writes and syncs a private temporary file, then
 atomically publishes without replacing existing destinations. Tests cover write,
 sync, and publish failures and cleanup. Cleanup is best effort; directory metadata
-is not synced. The export key is not connected.
-Daily totals and user-facing CSV export are not implemented. Real Ghostty and macOS suspend-clock validation are pending.
+is not synced. Outside the activity menu, `e` now exports all completed sessions
+through that publisher to numbered `bad-timer-N.csv` files in the current directory,
+skipping existing destinations. Success/path or nonfatal failure appears on screen;
+export leaves running timers and history unchanged. PTY tests cover empty history,
+completed/live sessions, repeated exports, existing destinations, and write failure.
+Daily totals are not implemented. Real Ghostty and macOS suspend-clock validation are pending.
 Read `PLAN.md` for the approved MVP and defaults. Plan approval is not blanket
 implementation approval: propose each small implementation step and its acceptance
 checks, obtain explicit approval, implement only that step, then stop for review.

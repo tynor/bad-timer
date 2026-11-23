@@ -1,4 +1,5 @@
 """macOS PTY checks; run after zig build: python3 tests/terminal_smoke.py."""
+import csv
 import errno
 import json
 import resource
@@ -14,7 +15,7 @@ import time
 import tempfile
 from pathlib import Path
 
-EXE = "./zig-out/bin/bad_timer"
+EXE = str(Path("./zig-out/bin/bad_timer").resolve())
 HOME = tempfile.TemporaryDirectory(prefix="bad-timer-test-")
 ENV = dict(os.environ, TERM="xterm-ghostty", HOME=HOME.name)
 CONFIG = Path(HOME.name) / "Library/Application Support/bad-timer/config.json"
@@ -38,7 +39,7 @@ def receive(fd, needle):
     return data
 
 
-def launch(output=None, args=(), env=ENV, file_size_limit=None):
+def launch(output=None, args=(), env=ENV, file_size_limit=None, cwd=None):
     master, slave = pty.openpty()
     original = termios.tcgetattr(slave)
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
@@ -52,10 +53,72 @@ def launch(output=None, args=(), env=ENV, file_size_limit=None):
 
     process = subprocess.Popen(
         [EXE, *args], stdin=slave, stdout=slave if output is None else output,
-        stderr=subprocess.PIPE, env=env, preexec_fn=controlling_terminal,
+        stderr=subprocess.PIPE, env=env, preexec_fn=controlling_terminal, cwd=cwd,
     )
     return process, master, slave, original
 
+
+# Export skips existing destinations, excludes live time, and never changes history.
+with tempfile.TemporaryDirectory(prefix="bad-timer-export-") as directory:
+    reports = Path(directory)
+    history = reports / "history.jsonl"
+    existing = reports / "bad-timer-1.csv"
+    existing.write_bytes(b"keep me")
+    process, master, slave, original = launch(cwd=directory, args=("--history", str(history)))
+    try:
+        receive(master, b"Timer controls ready.")
+        os.write(master, b"e")
+        receive(master, b"Exported completed sessions to ./bad-timer-2.csv")
+        assert len(list(csv.reader((reports / "bad-timer-2.csv").open()))) == 1
+        assert history.read_bytes() == b""
+        os.write(master, b"1")
+        receive(master, b"Active: Work")
+        before = history.read_bytes()
+        os.write(master, b"e")
+        receive(master, b"Exported completed sessions to ./bad-timer-3.csv")
+        assert history.read_bytes() == before
+        assert len(list(csv.reader((reports / "bad-timer-3.csv").open()))) == 1
+        os.write(master, b"1")
+        receive(master, b"Stopped")
+        before = history.read_bytes()
+        os.write(master, b"e")
+        receive(master, b"Exported completed sessions to ./bad-timer-4.csv")
+        rows = list(csv.reader((reports / "bad-timer-4.csv").open()))
+        assert len(rows) == 2 and rows[1][:2] == ["work", "Work"], rows
+        assert history.read_bytes() == before
+        assert existing.read_bytes() == b"keep me"
+        os.write(master, b"q")
+        receive(master, b"\x1b[?25h\x1b[?1049l")
+        assert process.wait(timeout=5) == 0, process.stderr.read()
+        assert termios.tcgetattr(master) == original
+    finally:
+        os.close(master)
+        os.close(slave)
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+# A failed report write is nonfatal, preserves history, and removes temporary files.
+with tempfile.TemporaryDirectory(prefix="bad-timer-export-failure-") as directory:
+    history = Path(directory) / "history.jsonl"
+    process, master, slave, original = launch(cwd=directory, args=("--history", str(history)), file_size_limit=0)
+    try:
+        receive(master, b"Timer controls ready.")
+        os.write(master, b"e")
+        receive(master, b"history unchanged.")
+        assert process.poll() is None
+        assert history.read_bytes() == b""
+        assert list(Path(directory).iterdir()) == [history]
+        os.write(master, b"q")
+        receive(master, b"\x1b[?25h\x1b[?1049l")
+        assert process.wait(timeout=5) == 0, process.stderr.read()
+        assert termios.tcgetattr(master) == original
+    finally:
+        os.close(master)
+        os.close(slave)
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
 
 # Overrides work without HOME and take precedence over the default config.
 override = Path(HOME.name) / "custom config.json"
