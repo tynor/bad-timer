@@ -48,7 +48,10 @@ and append failure. An `a` activity menu now lists all configured activities wit
 Up/Down navigation, scrolling, Enter selection through the same durable transition
 path, and Escape cancellation. PTY checks cover selection beyond nine, fragmented
 arrow input, resize/scrolling, cancellation, and menu start/stop/switch.
-Daily totals and CSV export are not implemented. Real Ghostty and macOS suspend-clock validation are pending.
+An isolated in-memory CSV encoder now exports completed sessions with exact
+nanosecond timestamps/durations, CSV text escaping, and spreadsheet-formula
+neutralization; it does not write files or connect the export key.
+Daily totals and user-facing CSV export are not implemented. Real Ghostty and macOS suspend-clock validation are pending.
 Read `PLAN.md` for the approved MVP and defaults. Plan approval is not blanket
 implementation approval: propose each small implementation step and its acceptance
 checks, obtain explicit approval, implement only that step, then stop for review.
@@ -69,6 +72,7 @@ The approved requirements are not existing behavior.
 - `src/clock.zig`, `src/clock.h`: macOS monotonic/UTC clock acquisition and tests.
 - `src/config.zig`: owned JSON config parsing/loading, validation, numeric keys, and tests.
 - `src/history.zig`: owned in-memory event encoding/replay, strict validation, and tests.
+- `src/export.zig`: in-memory CSV encoding of completed sessions, escaping, formula safety, and tests.
 - `src/storage.zig`: history-file creation, lifetime locking, replay, durable append, and tests.
 - `PLAN.md`: approved scope, behavior, milestones, and acceptance checks.
 

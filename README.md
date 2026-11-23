@@ -7,7 +7,8 @@ activity, and monotonic elapsed seconds. Transitions are synced before display.
 Press `a` for a scrolling menu of all activities, including those beyond nine.
 Up/Down moves, Enter selects (with the same start/stop/switch behavior), and
 Escape cancels without changing timing. Tracking continues while the menu is open.
-**Daily totals and CSV export are not implemented.**
+**Daily totals and user-facing CSV export are not implemented.** An isolated
+in-memory CSV encoder is available; the `e` key and report-file publishing are not yet wired up.
 See `PLAN.md` for approved scope and the per-step review gate.
 
 ## Build and run
@@ -95,6 +96,28 @@ from -62135510400 through 253402214399 (a conservative range within years 1–99
 Tests cover UTC, pre-epoch time, local midnight, independent zones, invalid input,
 and Los Angeles's 23-hour/25-hour days in 2024. Rules come from the installed
 macOS time-zone database and may change with OS updates.
+
+## In-memory CSV encoder
+
+`bad_timer.csv.encode(allocator, sessions)` in `src/export.zig` returns owned CSV
+bytes for completed sessions in input order; the caller frees the result. It does
+not read history, include a live session, or write files. Empty input returns only
+`activity_id,activity_name,start_utc,end_utc,duration_seconds` and a CRLF.
+
+Rows use historical IDs/names, CRLF record endings, and UTC ISO-8601 timestamps
+with nine fractional digits (years 0001–9999). Out-of-range timestamps reject the
+whole export. Duration seconds have nine fractional digits, preserving recorded
+monotonic nanoseconds even when UTC endpoints disagree or run backwards.
+Text fields are always double-quoted; embedded quotes are doubled, and Unicode,
+commas, CR, and LF are retained. Formula-like fields beginning with `=`, `+`, `-`,
+or `@` (also after leading ASCII whitespace/control bytes), or beginning with a
+tab/CR/LF, receive a leading apostrophe inside the quotes. This deliberately
+changes exported text for spreadsheet safety; it does not change history.
+
+Tests cover exact output, empty input, quoting, formula neutralization in both
+text columns, historical names, pre-epoch/leap dates, timestamp limits, duration
+extremes, backwards UTC, and row order. Actual spreadsheet applications have not
+been tested. File publishing without overwrite and TUI integration remain deferred.
 
 ## In-memory history codec
 
