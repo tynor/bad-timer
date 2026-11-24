@@ -65,9 +65,14 @@ spans belong to the start date. Deterministic tests cover midnight, DST, renames
 live sessions, and clock jumps. The TUI now shows today's per-activity totals and
 configured zone, including live time and removed activities. It refreshes on live
 seconds, transitions, and configured-zone day changes, without idle redraws.
-Rendering clips to terminal rows with wrapping disabled and an enlargement hint;
-the activity menu still reaches every configured activity. PTY tests cover live
-updates, restart, removed activities, zone attribution, and small-screen resize.
+The cleaned-up main screen removes debug dimensions/key bytes/readiness text,
+formats elapsed/totals as HH:MM:SS, and combines shortcuts, totals, and activity
+names in one list with a color-independent running marker. Current config names
+are used for configured IDs; removed IDs keep recorded names. Controls/status
+have reserved bottom rows; small screens simplify headers/help and safely clip
+with an enlargement hint. The activity menu still reaches every configured activity.
+PTY tests cover live updates, restart/renames, removed activities, zone attribution,
+footer/status placement, and resize down to a one-row screen.
 An isolated `history_recovery.recover` API now locks an existing source, validates
 all LF-terminated records, and publishes their exact prefix to a new no-overwrite
 file, reporting omitted tail bytes and retained completed/unfinished sessions.

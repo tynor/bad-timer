@@ -158,24 +158,39 @@ with tempfile.TemporaryDirectory(prefix="bad-timer-totals-") as directory:
         ])
     history.write_text("".join(json.dumps(event) + "\n" for event in events))
     for restart in (False, True):
+        if restart:
+            config.write_text(json.dumps({"time_zone": zone.key, "activities": [{"id": "work", "name": "Renamed work"}]}))
         process, master, slave, original = launch(args=("--config", str(config), "--history", str(history)))
         try:
-            screen = receive(master, b"1: Work")
-            assert b"Today's totals (Pacific/Kiritimati)" in screen
-            assert b"7 seconds: Removed" in screen and b"Yesterday" not in screen
+            screen = receive(master, b"\x1b[?7h")
+            assert b"bad-timer | Pacific/Kiritimati" in screen
+            assert b"00:00:07  Removed" in screen and b"Yesterday" not in screen
+            assert b"Last key" not in screen and b"columns x" not in screen
+            assert b"Key  Today" in screen
             if not restart:
                 before = history.read_bytes()
                 os.write(master, b"1")
-                receive(master, b"1 seconds: Work")
+                running = receive(master, b"> 1  00:00:01  Work")
+                if b"\x1b[?7h" not in running[running.index(b"> 1  00:00:01  Work"):]:
+                    receive(master, b"\x1b[?7h")
                 os.write(master, b"1")
-                receive(master, b"Stopped")
+                stopped = receive(master, b"\x1b[?7h")
+                assert b"Stopped" in stopped
                 assert history.read_bytes().startswith(before)
                 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 3, 20, 0, 0))
                 process.send_signal(signal.SIGWINCH)
-                receive(master, b"More rows: enlarge terminal")
+                small = receive(master, b"\x1b[?7h")
+                assert b"More rows: enlarge terminal" in small
+                assert b"\x1b[3;1Ha menu e csv q quit" in small
+                assert b"\x1b[4;1H" not in small
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 1, 5, 0, 0))
+                process.send_signal(signal.SIGWINCH)
+                tiny = receive(master, b"\x1b[?7h")
+                assert b"\x1b[1;1Ha e q" in tiny and b"\x1b[2;1H" not in tiny
                 assert process.poll() is None
             else:
-                assert b"seconds: Work" in screen
+                assert b"00:00:00  Renamed work" not in screen
+                assert screen.count(b"Renamed work") == 1 and b"  Work" not in screen
             os.write(master, b"q")
             receive(master, b"\x1b[?25h\x1b[?1049l")
             assert process.wait(timeout=5) == 0, process.stderr.read()
@@ -195,9 +210,11 @@ with tempfile.TemporaryDirectory(prefix="bad-timer-export-") as directory:
     existing.write_bytes(b"keep me")
     process, master, slave, original = launch(cwd=directory, args=("--history", str(history)))
     try:
-        receive(master, b"Timer controls ready.")
+        receive(master, b"\x1b[?7h")
         os.write(master, b"e")
-        receive(master, b"Exported completed sessions to ./bad-timer-2.csv")
+        screen = receive(master, b"\x1b[?7h")
+        assert b"\x1b[23;1HExported completed sessions to ./bad-timer-2.csv" in screen
+        assert b"\x1b[24;1H1-9: toggle" in screen
         assert len(list(csv.reader((reports / "bad-timer-2.csv").open()))) == 1
         assert history.read_bytes() == b""
         os.write(master, b"1")
@@ -232,7 +249,7 @@ with tempfile.TemporaryDirectory(prefix="bad-timer-export-failure-") as director
     history = Path(directory) / "history.jsonl"
     process, master, slave, original = launch(cwd=directory, args=("--history", str(history)), file_size_limit=0)
     try:
-        receive(master, b"Timer controls ready.")
+        receive(master, b"\x1b[?7h")
         os.write(master, b"e")
         receive(master, b"history unchanged.")
         assert process.poll() is None
@@ -257,7 +274,7 @@ without_home.pop("HOME", None)
 for path in (str(override), os.path.relpath(override)):
     process, master, slave, original = launch(args=("--config", path, "--history", str(override) + ".jsonl"), env=without_home)
     try:
-        receive(master, b"Timer controls ready.")
+        receive(master, b"\x1b[?7h")
         os.write(master, b"q")
         receive(master, b"\x1b[?25h\x1b[?1049l")
         assert process.wait(timeout=5) == 0, process.stderr.read()
@@ -358,7 +375,7 @@ history.unlink()
 for iteration in range(2):
     process, master, slave, original = launch(args=("--history", str(history)))
     try:
-        receive(master, b"Timer controls ready.")
+        receive(master, b"\x1b[?7h")
         assert history.read_bytes() == b""
         assert history.stat().st_mode & 0o777 == 0o600
         second, m2, s2, original2 = launch(args=("--history", str(history)))
@@ -408,7 +425,7 @@ for action in (b"q", b"\x03", signal.SIGTERM, b"d", "write_failure"):
             else:
                 os.kill(process.pid, action)
             if action == b"d":
-                receive(master, b"Timer controls ready.")
+                receive(master, b"\x1b[?7h")
                 saved = history.read_bytes()
                 assert saved.startswith(start)
                 assert json.loads(saved[len(start):]) == {
@@ -430,7 +447,7 @@ for action in (b"q", b"\x03", signal.SIGTERM, b"d", "write_failure"):
     # Reopening must reflect exactly the durable recovery decision.
     process, master, slave, original = launch(args=("--history", str(history)))
     try:
-        receive(master, b"Timer controls ready." if action == b"d" else b"Unfinished session 7")
+        receive(master, b"\x1b[?7h" if action == b"d" else b"Unfinished session 7")
         os.write(master, b"q")
         receive(master, b"\x1b[?25h\x1b[?1049l")
         assert process.wait(timeout=5) == 0, process.stderr.read()
@@ -466,7 +483,7 @@ for action, duration_input in [(a, d) for d in (False, True) for a in ("save", "
         if action in ("save", "failure"):
             os.write(master, b"y")
             if action == "save":
-                receive(master, b"Timer controls ready.")
+                receive(master, b"\x1b[?7h")
                 saved = history.read_bytes()
                 assert saved.startswith(start)
                 stop = json.loads(saved[len(start):])["change"]["stop"]
@@ -496,7 +513,7 @@ for action, duration_input in [(a, d) for d in (False, True) for a in ("save", "
             process.wait(timeout=5)
     process, master, slave, original = launch(args=("--history", str(history)))
     try:
-        receive(master, b"Timer controls ready." if action == "save" else b"Unfinished session 7")
+        receive(master, b"\x1b[?7h" if action == "save" else b"Unfinished session 7")
         os.write(master, b"q")
         receive(master, b"\x1b[?25h\x1b[?1049l")
         assert process.wait(timeout=5) == 0
@@ -515,10 +532,12 @@ for exit_key in (b"q", b"\x03", signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
         receive(master, b"\x1b[?7h")
         assert not select.select([master], [], [], 1.2)[0], "idle redraw"
         os.write(master, b"x")
-        receive(master, b"Last key byte: 120")
+        screen = receive(master, b"\x1b[?7h")
+        assert b"Last key" not in screen and b"controls ready" not in screen
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
         os.kill(process.pid, signal.SIGWINCH)
-        receive(master, b"100 columns x 30 rows")
+        screen = receive(master, b"\x1b[?7h")
+        assert b"\x1b[30;1H1-9: toggle" in screen
         if isinstance(exit_key, bytes):
             os.write(master, exit_key)
         else:
@@ -542,12 +561,12 @@ for exit_key in (b"q", b"\x03", signal.SIGTERM):
     tracked.write_bytes(b"")
     process, master, slave, original = launch(args=("--config", str(controls), "--history", str(tracked)))
     try:
-        receive(master, b"2: Rest")
+        receive(master, b"  2  00:00:00  Rest")
         for key, marker in ((b"1", b"Active: Work"), (b"2", b"Active: Rest"),
                             (b"2", b"Stopped"), (b"1", b"Active: Work")):
             os.write(master, key)
             receive(master, marker)
-        receive(master, b"Elapsed: 1 seconds")
+        receive(master, b"Elapsed: 00:00:01")
         if isinstance(exit_key, bytes):
             os.write(master, exit_key)
         else:
@@ -588,7 +607,9 @@ menu_config.write_text(json.dumps({"activities": [
 menu_history = Path(HOME.name) / "menu.jsonl"
 process, master, slave, original = launch(args=("--config", str(menu_config), "--history", str(menu_history)))
 try:
-    receive(master, b"9: Activity 9")
+    screen = receive(master, b"\x1b[?7h")
+    assert b"  9  00:00:00  Activity 9" in screen
+    assert b"  -  00:00:00  Activity 10" in screen
     os.write(master, b"1")
     receive(master, b"Active: Activity 1")
     saved = menu_history.read_bytes()
@@ -649,7 +670,7 @@ finally:
 tracked.write_bytes(b"")
 process, master, slave, original = launch(args=("--history", str(tracked)), file_size_limit=0)
 try:
-    receive(master, b"Timer controls ready.")
+    receive(master, b"\x1b[?7h")
     os.write(master, b"1")
     receive(master, b"\x1b[?25h\x1b[?1049l")
     assert process.wait(timeout=5) == 1

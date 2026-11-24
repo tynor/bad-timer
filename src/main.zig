@@ -186,7 +186,6 @@ fn run(init: std.process.Init) !void {
     var live: timer.Timer = .{};
     var last_second: u64 = 0;
     var last_day: ?i64 = null;
-    var last_key: ?u8 = null;
     var menu: ?usize = null;
     var export_number: u64 = 1;
     var status_buffer: [256]u8 = undefined;
@@ -226,7 +225,7 @@ fn run(init: std.process.Init) !void {
             } else {
                 const totals = try timer.totals.calculate(allocator, zone, store.history.sessions.items, live, now);
                 defer allocator.free(totals);
-                try draw(last_key, config, live, second, status, totals);
+                try draw(config, live, second, status, totals);
             }
             dirty = false;
         }
@@ -344,7 +343,6 @@ fn run(init: std.process.Init) !void {
             if (index < config.activities().len)
                 try transition(&live, &store, init.io, config.activities()[index], locations.history);
         }
-        last_key = key;
         dirty = true;
     }
     if (live.running != null) try transition(&live, &store, init.io, null, locations.history);
@@ -465,46 +463,77 @@ const Screen = struct {
     }
 };
 
-fn draw(key: ?u8, config: Config, live: timer.Timer, seconds: u64, status: []const u8, totals: []const timer.totals.Total) !void {
+fn duration(buffer: []u8, seconds: u128) ![]const u8 {
+    return std.fmt.bufPrint(buffer, "{d:0>2}:{d:0>2}:{d:0>2}", .{ seconds / 3600, seconds / 60 % 60, seconds % 60 });
+}
+
+fn activityRow(screen: *Screen, key: ?u8, activity: timer.Activity, active: bool, seconds: u128) !void {
+    if (!try screen.line()) return;
+    var buffer: [80]u8 = undefined;
+    try output(&.{ if (active) '>' else ' ', ' ', key orelse '-', ' ', ' ' });
+    try output(try duration(&buffer, seconds));
+    try output("  ");
+    try activityName(activity.name);
+}
+
+test "display durations keep hours beyond one day and do not wrap" {
+    var buffer: [80]u8 = undefined;
+    try std.testing.expectEqualStrings("00:00:00", try duration(&buffer, 0));
+    try std.testing.expectEqualStrings("01:02:03", try duration(&buffer, 3723));
+    try std.testing.expectEqualStrings("100:00:01", try duration(&buffer, 360001));
+    _ = try duration(&buffer, std.math.maxInt(u128) / std.time.ns_per_s);
+}
+
+fn draw(config: Config, live: timer.Timer, seconds: u64, status: []const u8, totals: []const timer.totals.Total) !void {
     var size: c.struct_winsize = std.mem.zeroes(c.struct_winsize);
     if (c.ioctl(c.STDOUT_FILENO, c.TIOCGWINSZ, &size) != 0) return error.TerminalSizeFailed;
     try output("\x1b[H\x1b[2J\x1b[?7l");
     defer output("\x1b[?7h") catch {};
-    var screen = Screen{ .rows = @max(size.ws_row, 1) };
+    const rows: usize = @max(size.ws_row, 1);
+    const status_rows: usize = @intFromBool(status.len != 0 and rows > 1);
+    var screen = Screen{ .rows = rows - 1 - status_rows };
     var buffer: [256]u8 = undefined;
-    if (try screen.line()) try output("bad-timer");
-    if (try screen.line()) try output(try std.fmt.bufPrint(&buffer, "{d} columns x {d} rows", .{ size.ws_col, size.ws_row }));
-    if (try screen.line()) try output(try std.fmt.bufPrint(&buffer, "Last key byte: {d}", .{key orelse 0}));
-    if (try screen.line()) try output("q: save and quit | Ctrl-C: save and quit");
-    if (try screen.line()) try output("Timer controls ready.");
-    if (try screen.line()) try output(try std.fmt.bufPrint(&buffer, "Elapsed: {d} seconds", .{seconds}));
+    if (rows >= 8 and try screen.line()) {
+        try output("bad-timer | ");
+        try activityName(config.timeZone());
+    }
     if (try screen.line()) {
         try output(if (live.running != null) "Active: " else "Stopped");
         if (live.running) |running| try activityName(running.activity.name);
     }
-    if (try screen.line()) try output("a: activity menu | e: export completed sessions");
-    if (status.len != 0 and try screen.line()) try output(status);
     if (try screen.line()) {
-        try output("Today's totals (");
-        try activityName(config.timeZone());
-        try output("): ");
-        if (totals.len == 0) try output("no time yet");
+        try output("Elapsed: ");
+        try output(try duration(&buffer, seconds));
     }
-    for (totals) |total| {
-        if (try screen.line()) {
-            try output(try std.fmt.bufPrint(&buffer, "{d} seconds: ", .{total.duration_ns / std.time.ns_per_s}));
-            try activityName(total.activity.name);
-        }
+    if (rows >= 8) {
+        _ = try screen.line();
+        if (try screen.line()) try output("Key  Today     Activity (> running)");
     }
     for (config.activities(), 0..) |activity, index| {
-        if (config.numericKey(index)) |key_byte| {
-            if (try screen.line()) {
-                try output(&.{ key_byte, ':', ' ' });
-                try activityName(activity.name);
+        var ns: u128 = 0;
+        for (totals) |total| {
+            if (std.mem.eql(u8, activity.id, total.activity.id)) {
+                ns = total.duration_ns;
+                break;
             }
         }
+        const active = if (live.running) |running| std.mem.eql(u8, running.activity.id, activity.id) else false;
+        try activityRow(&screen, config.numericKey(index), activity, active, ns / std.time.ns_per_s);
     }
-    if (screen.clipped) {
-        try output(try std.fmt.bufPrint(&buffer, "\x1b[{d};1H\x1b[2KMore rows: enlarge terminal (a: menu)", .{screen.rows}));
+    for (totals) |total| {
+        for (config.activities()) |activity| {
+            if (std.mem.eql(u8, activity.id, total.activity.id)) break;
+        } else {
+            try activityRow(&screen, null, total.activity, false, total.duration_ns / std.time.ns_per_s);
+        }
     }
+    if (screen.clipped and screen.rows > 0) {
+        try output(try std.fmt.bufPrint(&buffer, "\x1b[{d};1H\x1b[2KMore rows: enlarge terminal", .{screen.rows}));
+    }
+    if (status_rows != 0) {
+        try output(try std.fmt.bufPrint(&buffer, "\x1b[{d};1H", .{rows - 1}));
+        try activityName(status);
+    }
+    try output(try std.fmt.bufPrint(&buffer, "\x1b[{d};1H", .{rows}));
+    try output(if (size.ws_col >= 50) "1-9: toggle | a: activities | e: export | q: quit" else if (size.ws_col >= 18) "a menu e csv q quit" else "a e q");
 }

@@ -3,14 +3,35 @@
 A keyboard-driven workday timer with durable numeric-key activity tracking.
 Keys `1`–`9` select activities in config order: start while stopped, stop the
 same activity, or switch atomically to another. The screen shows keys, active
-activity, and monotonic elapsed seconds. Transitions are synced before display.
+activity, and monotonic elapsed time as `HH:MM:SS` (hours can exceed 24).
+Transitions are synced before display.
 Press `a` for a scrolling menu of all activities, including those beyond nine.
 Up/Down moves, Enter selects (with the same start/stop/switch behavior), and
 Escape cancels without changing timing. Tracking continues while the menu is open.
 Press `e` outside the menu to export completed sessions as CSV (details below).
 Today's per-activity totals include completed and running time in the configured
-zone, shown in whole seconds. Removed activities remain visible under their recorded
-names. Small screens clip rows without scrolling; enlarge the terminal to see more
+zone, shown as `HH:MM:SS` in one list alongside activity shortcuts. `>` marks the
+running activity without relying on color. Configured activities use their current
+names; removed activities retain recorded names. `-` means no numeric shortcut
+(use `a` for configured activities beyond nine). Configured activities with no
+time today show zero.
+
+```text
+bad-timer | America/Los_Angeles
+Active: Work
+Elapsed: 00:42:10
+
+Key  Today     Activity (> running)
+> 1  01:15:30  Work
+  2  00:12:00  Break
+  -  00:08:20  Old task
+
+1-9: toggle | a: activities | e: export | q: quit
+```
+
+The controls footer stays at the bottom, with export status immediately above it.
+Small screens reduce the header and help text, clip rows without scrolling, and
+show an enlargement hint. At extremely small sizes, controls/status take priority
 (the `a` menu still reaches every configured activity).
 See `PLAN.md` for approved scope and the per-step review gate.
 
@@ -74,7 +95,7 @@ Measured on Apple M1 Max (arm64), macOS 27.2.1, Zig 0.17.1, ReleaseSmall:
 
 | Measurement | Result |
 | --- | ---: |
-| Executable size (including recovery CLI) | 278,040 bytes |
+| Executable size (including recovery CLI and cleaned-up TUI) | 277,720 bytes |
 | Empty history | 0 bytes |
 | After start | 124 bytes |
 | After switch | 391 bytes |
