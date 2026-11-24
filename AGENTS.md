@@ -47,7 +47,13 @@ restart. PTY tests cover controls, atomic switch, clean-exit saving, restart,
 and append failure. An `a` activity menu now lists all configured activities with
 Up/Down navigation, scrolling, Enter selection through the same durable transition
 path, and Escape cancellation. PTY checks cover selection beyond nine, fragmented
-arrow input, resize/scrolling, cancellation, and menu start/stop/switch.
+arrow input, resize/scrolling, cancellation, and menu start/stop/switch. The menu
+now shares the main screen's explicit-row layout, with separate selection (`>`)
+and `[running]` labels, actual numeric shortcuts (`-` beyond nine), a position /
+hidden-row-count header, and bottom navigation help. At one/two rows the selected
+item includes its position; one-row terminals prioritize selection over help.
+PTY tests also cover running versus selected state, scroll counts, shortcut display,
+long/control-containing names, and one-/two-row resize without changing history.
 An isolated CSV encoder now exports completed sessions with exact
 nanosecond timestamps/durations, CSV text escaping, and spreadsheet-formula
 neutralization. Its `publish` API writes and syncs a private temporary file, then

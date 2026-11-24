@@ -41,6 +41,13 @@ def receive(fd, needle):
     return data
 
 
+def receive_frame(fd, needle):
+    data = receive(fd, needle)
+    if b"\x1b[?7h" not in data[data.index(needle):]:
+        data += receive(fd, b"\x1b[?7h")
+    return data
+
+
 def launch(output=None, args=(), env=ENV, file_size_limit=None, cwd=None):
     master, slave = pty.openpty()
     original = termios.tcgetattr(slave)
@@ -603,7 +610,7 @@ for exit_key in (b"q", b"\x03", signal.SIGTERM):
 # Menu selection reaches beyond nine, scrolls after resize, and uses durable toggles.
 menu_config = Path(HOME.name) / "menu.json"
 menu_config.write_text(json.dumps({"activities": [
-    {"id": str(i), "name": f"Activity {i}"} for i in range(1, 13)]}))
+    {"id": str(i), "name": f"Activity {i}" + ("界" * 80 + "\x1b[2J" if i == 12 else "")} for i in range(1, 13)]}))
 menu_history = Path(HOME.name) / "menu.jsonl"
 process, master, slave, original = launch(args=("--config", str(menu_config), "--history", str(menu_history)))
 try:
@@ -614,40 +621,69 @@ try:
     receive(master, b"Active: Activity 1")
     saved = menu_history.read_bytes()
     os.write(master, b"a")
-    receive(master, b"> 1: Activity 1")
+    screen = receive_frame(master, b"> 1  [running] Activity 1")
+    assert b"Activities 1/12 | ^0 v0" in screen
+    assert b"\x1b[24;1HUp/Down: move | Enter: toggle | Esc: back" in screen
     # Fragmented CSI and application-cursor arrows are both accepted.
     os.write(master, b"\x1b")
     time.sleep(0.01)
     os.write(master, b"[B")
-    receive(master, b"> 2: Activity 2")
+    screen = receive_frame(master, b"> 2  Activity 2")
+    assert b"  1  [running] Activity 1" in screen and screen.count(b"[running]") == 1
     os.write(master, b"\x1bOA")
-    receive(master, b"> 1: Activity 1")
+    receive_frame(master, b"> 1  [running] Activity 1")
     os.write(master, b"\x1b")
-    receive(master, b"Active: Activity 1")
+    receive_frame(master, b"Active: Activity 1")
     assert menu_history.read_bytes() == saved, "cancel changed timing"
     os.write(master, b"a")
-    receive(master, b"> 1: Activity 1")
+    receive_frame(master, b"> 1  [running] Activity 1")
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 4, 40, 0, 0))
     os.kill(process.pid, signal.SIGWINCH)
-    receive(master, b"> 1: Activity 1")
+    screen = receive_frame(master, b"> 1  [running] Activity 1")
+    assert b"Activities 1/12 | ^0 v10" in screen
     for i in range(2, 11):
         os.write(master, b"\x1b[B")
-        screen = receive(master, f"> {i}: Activity {i}".encode())
-    assert b"  1: Activity 1\r\n" not in screen, "menu did not scroll"
+        screen = receive_frame(master, f"> {i if i <= 9 else '-'}  Activity {i}".encode())
+    assert b"Activity 1\x1b" not in screen, "menu did not scroll"
+    assert b"Activities 10/12 | ^8 v2" in screen
+    assert b"\x1b[4;1HUp/Down Enter Esc: back" in screen
+    assert b"> 10" not in screen, "position must not look like a numeric shortcut"
+    # At one row selection wins over chrome; every item remains reachable.
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 1, 20, 0, 0))
+    os.kill(process.pid, signal.SIGWINCH)
+    receive_frame(master, b"> 10/12 -  Activity 10")
+    for i in (11, 12):
+        os.write(master, b"\x1b[B")
+        screen = receive_frame(master, f"> {i}/12 -  Activity {i}".encode())
+        assert b"\x1b[2;1H" not in screen
+    assert b"?[2J" in screen and b"\x1b[2J" not in screen[screen.index(b"Activity 12"):]
+    os.write(master, b"\x1b[B")
+    receive_frame(master, b"> 12/12 -  Activity 12")
+    os.write(master, b"\x1b[A")
+    receive_frame(master, b"> 11/12 -  Activity 11")
+    os.write(master, b"\x1b[A")
+    receive_frame(master, b"> 10/12 -  Activity 10")
+    assert menu_history.read_bytes() == saved, "menu navigation changed history"
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 2, 20, 0, 0))
+    os.kill(process.pid, signal.SIGWINCH)
+    screen = receive_frame(master, b"> 10/12 -  Activity 10")
+    assert b"\x1b[2;1H^v Ent Esc" in screen
     os.write(master, b"\r")
-    receive(master, b"More rows: enlarge terminal")
+    receive_frame(master, b"More rows: enlarge terminal")
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
     os.kill(process.pid, signal.SIGWINCH)
-    receive(master, b"Active: Activity 10")
+    receive_frame(master, b"Active: Activity 10")
     os.write(master, b"a")
-    receive(master, b"> 1: Activity 1")
+    screen = receive_frame(master, b"> 1  Activity 1")
+    assert b"  -  [running] Activity 10" in screen
     for i in range(2, 11):
         os.write(master, b"\x1b[B")
-        receive(master, f"> {i}: Activity {i}".encode())
+        receive_frame(master, (f"> {i}  Activity {i}" if i <= 9 else "> -  [running] Activity 10").encode())
     os.write(master, b"\r")
-    receive(master, b"Stopped")
+    receive_frame(master, b"Stopped")
     os.write(master, b"a")
-    receive(master, b"> 1: Activity 1")
+    screen = receive_frame(master, b"> 1  Activity 1")
+    assert b"[running]" not in screen
     os.write(master, b"\r")
     receive(master, b"Active: Activity 1")
     os.write(master, b"q")

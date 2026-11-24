@@ -8,6 +8,12 @@ Transitions are synced before display.
 Press `a` for a scrolling menu of all activities, including those beyond nine.
 Up/Down moves, Enter selects (with the same start/stop/switch behavior), and
 Escape cancels without changing timing. Tracking continues while the menu is open.
+The menu uses `>` for selection and a separate `[running]` label for the active
+activity. Only actual numeric shortcuts are shown; `-` marks activities beyond nine.
+The header shows selection position (`10/12`) and hidden-row counts (`^8 v2` means
+8 above, 2 below). Navigation help stays at the bottom. On one- or two-row screens,
+position moves beside the selected item; at one row help is omitted so selection
+remains visible. Names clip without wrapping, and resizing preserves selection.
 Press `e` outside the menu to export completed sessions as CSV (details below).
 Today's per-activity totals include completed and running time in the configured
 zone, shown as `HH:MM:SS` in one list alongside activity shortcuts. `>` marks the
@@ -95,7 +101,7 @@ Measured on Apple M1 Max (arm64), macOS 27.2.1, Zig 0.17.1, ReleaseSmall:
 
 | Measurement | Result |
 | --- | ---: |
-| Executable size (including recovery CLI and cleaned-up TUI) | 277,720 bytes |
+| Executable size (including recovery CLI and cleaned-up TUI) | 277,832 bytes |
 | Empty history | 0 bytes |
 | After start | 124 bytes |
 | After switch | 391 bytes |
@@ -114,8 +120,9 @@ unverified; these short, empty-history measurements are not a release certificat
 
 The Python smoke test uses macOS pseudo-terminals to check input, resize, no
 idle redraw, quit/Ctrl-C/signals, runtime output-disconnection errors, termios
-restoration, menu selection beyond nine, scrolling/resize, cancellation, durable
-menu start/stop/switch, and rejection of non-TTY/unsupported-terminal startup. It requires
+restoration, menu selection beyond nine, selection/running labels, shortcut display,
+scroll counts, one-/two-row resize, long/control-containing names, cancellation,
+durable menu start/stop/switch, and rejection of non-TTY/unsupported-terminal startup. It requires
 Python 3 and is separate from `zig build test`.
 
 `zig build test` covers the timer's start/stop, same-ID toggle, gap-free switching,
@@ -424,7 +431,7 @@ nonblank; names must be nonblank (blank means only ASCII spaces, tabs, CR, or LF
 Strings are preserved without trimming; IDs are case-sensitive. Malformed JSON,
 missing required fields, wrong types, duplicate fields, and unknown fields are
 rejected. Config order assigns numeric keys `1`–`9`; later activities are retained
-in order without numeric keys for the future menu. Reordering never changes IDs.
+in order without numeric keys in the activity menu. Reordering never changes IDs.
 
 `Config.parse` owns its strings independently of the input buffer. Call `deinit`
 once and do not copy the owning config. Activities borrowed by timers or sessions

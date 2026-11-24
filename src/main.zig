@@ -221,7 +221,7 @@ fn run(init: std.process.Init) !void {
                     },
                 }
             } else if (menu) |selected| {
-                try drawMenu(config, selected);
+                try drawMenu(config, selected, live);
             } else {
                 const totals = try timer.totals.calculate(allocator, zone, store.history.sessions.items, live, now);
                 defer allocator.free(totals);
@@ -414,21 +414,36 @@ fn escapeKey() !?u8 {
     return 0;
 }
 
-fn drawMenu(config: Config, selected: usize) !void {
+fn drawMenu(config: Config, selected: usize, live: timer.Timer) !void {
     var size: c.struct_winsize = std.mem.zeroes(c.struct_winsize);
     if (c.ioctl(c.STDOUT_FILENO, c.TIOCGWINSZ, &size) != 0) return error.TerminalSizeFailed;
     // Disable wrapping so long or wide Unicode names cannot push the selection off screen.
     try output("\x1b[H\x1b[2J\x1b[?7l");
     defer output("\x1b[?7h") catch {};
     const rows: usize = @max(size.ws_row, 1);
-    if (rows > 1) try output("Activities: Up/Down, Enter: select, Esc: cancel\r\n");
-    const capacity = rows - @intFromBool(rows > 1);
+    const header = rows >= 3;
+    const footer = rows >= 2;
+    const capacity = rows - @intFromBool(header) - @intFromBool(footer);
     const first = selected -| (capacity - 1);
+    const end = @min(first + capacity, config.activities().len);
+    var screen = Screen{ .rows = rows };
     var buffer: [80]u8 = undefined;
-    for (first..@min(first + capacity, config.activities().len)) |index| {
-        if (index != first) try output("\r\n");
-        try output(try std.fmt.bufPrint(&buffer, "{s}{d}: ", .{ if (index == selected) "> " else "  ", index + 1 }));
-        try activityName(config.activities()[index].name);
+    if (header and try screen.line())
+        try output(try std.fmt.bufPrint(&buffer, "Activities {d}/{d} | ^{d} v{d}", .{ selected + 1, config.activities().len, first, config.activities().len - end }));
+    for (first..end) |index| {
+        _ = try screen.line();
+        try output(if (index == selected) "> " else "  ");
+        if (!header) try output(try std.fmt.bufPrint(&buffer, "{d}/{d} ", .{ selected + 1, config.activities().len }));
+        try output(&.{ config.numericKey(index) orelse '-', ' ', ' ' });
+        const activity = config.activities()[index];
+        if (live.running) |running| {
+            if (std.mem.eql(u8, running.activity.id, activity.id)) try output("[running] ");
+        }
+        try activityName(activity.name);
+    }
+    if (footer) {
+        try output(try std.fmt.bufPrint(&buffer, "\x1b[{d};1H", .{rows}));
+        try output(if (size.ws_col >= 44) "Up/Down: move | Enter: toggle | Esc: back" else if (size.ws_col >= 24) "Up/Down Enter Esc: back" else "^v Ent Esc");
     }
 }
 
