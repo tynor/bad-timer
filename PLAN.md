@@ -255,3 +255,20 @@ integrate saved zones into Today/This week and the 7-day/4-week screens, retaini
 shared date labels and interpreting each date's cutoffs in each session's saved
 zone (not grouping sections by timezone). This step does not change cutoffs.
 Mixed-zone/DST/boundary attribution tests belong with that later implementation.
+
+## 10. Approved step: saved-zone stats and summary cutoffs
+
+The user approved implementing the next step after session-zone persistence.
+Today/This week and both summary screens keep shared display-zone date labels,
+but calculate each completed/live session's boundaries in its saved timezone.
+Group by stable activity ID across zones, including removed activities; do not
+split reports into timezone groups. Preserve measured-duration attribution,
+cumulative nanosecond rounding, zero/backward-span start attribution, and exact
+per-period grand totals. Display-zone changes select labels, not replacement
+session zones. History/CSV stay unchanged and browsing remains read-only.
+
+Acceptance: deterministic mixed-zone daily/weekly and year-boundary tests; live
+Sunday versus display Monday, DST days/weeks, midnight boundaries, skipped dates,
+and rounding conservation; PTY checks of both stats columns and summary screens
+across restart with preserved history bytes. Keep existing scroll/resize, durable
+controls and no-idle-redraw behavior. Stop for review after this step.

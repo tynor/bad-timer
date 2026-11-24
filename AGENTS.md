@@ -110,7 +110,7 @@ periods are labeled and show in-progress state. Browsing ignores activity/export
 keys and does not write history. Shared synchronized rendering/resize bounds apply.
 Unit/PTY tests cover windows, DST/years, live splits, identities, read-only browsing,
 small-screen scrolling, no idle redraw, and live quit saving. The measured
-ReleaseSmall binary with summaries and session-zone persistence is now 279,528 bytes;
+ReleaseSmall binary with saved-zone stats/summary cutoffs is now 279,912 bytes;
 the earlier 2,691,368-byte result did not recur and its cause was not investigated.
 CPU/RSS and large-history scaling are unverified.
 Omitted config timezones now resolve the macOS system timezone once at startup,
@@ -133,10 +133,18 @@ reassigns; failure aborts with uncertainty and no logical commit/retry. Old bina
 reject v2 logs; v1 records after v2 and duplicate assignments are rejected. Tests
 cover zone ownership/validation, switches, recovery, restart/config changes,
 legacy preservation, and partial-write/sync failure blocking.
-IMPORTANT: this is persistence only, stopped for review. Stats/summary cutoffs
-still use the display zone. The agreed future semantics retain shared date labels
-and interpret cutoffs in each session's saved zone; a separate implementation step
-still needs approval. Do not group summary sections by zone.
+Approved PLAN.md section 10 now integrates saved-zone cutoffs into Today/This week
+and both summary screens. Shared date labels come from the startup display zone
+(`Dates:` in headers); each session's saved zone supplies its UTC cutoffs. Stable
+IDs combine across zones without timezone grouping. Live metadata is retained in
+attribution and can belong to the prior displayed day/week. `calculateDates` caches
+cutoff intervals per distinct zone per calculation; raw `calculateInterval` still
+means fixed UTC boundaries. Unzoned in-memory inputs use the display zone, while
+normal startup durably assigns legacy history before drawing. `intervalForDates`
+resolves local calendar boundaries including skipped dates and repeated midnight.
+Tests cover mixed zones, year/day/week cutoffs, DST days/weeks, live Sunday versus
+display Monday, rounding, and read-only mixed-zone PTY display/restart. History/CSV
+are unchanged. This step is implemented; stop for review before further scope.
 An isolated `history_recovery.recover` API now locks an existing source, validates
 all LF-terminated records, and publishes their exact prefix to a new no-overwrite
 file, reporting omitted tail bytes and retained completed/unfinished sessions.

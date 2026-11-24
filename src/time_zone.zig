@@ -71,6 +71,29 @@ pub const Zone = struct {
         self.* = undefined;
     }
 
+    /// Half-open local date range. Skipped dates have an empty interval.
+    pub fn intervalForDates(self: Zone, first: Date, end: Date) !Interval {
+        if (dateKey(first) >= dateKey(end)) return error.InvalidDateRange;
+        return .{ .start_utc_seconds = try self.dateStart(first), .end_utc_seconds = try self.dateStart(end) };
+    }
+
+    fn dateStart(self: Zone, date: Date) !i64 {
+        const leap = @mod(date.year, 4) == 0 and (@mod(date.year, 100) != 0 or @mod(date.year, 400) == 0);
+        const lengths = [_]i32{ 31, if (leap) 29 else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+        if (date.year < 1 or date.year > 9999 or date.month < 1 or date.month > 12 or date.day < 1 or date.day > lengths[@intCast(date.month - 1)]) return error.InvalidDate;
+        var at: f64 = undefined;
+        if (c.CFCalendarComposeAbsoluteTime(self.calendar, &at, "yMdH", date.year, date.month, date.day, @as(c_int, 12)) == 0) return error.CalendarConversionFailed;
+        var day = try self.dayAt(@as(i64, @intFromFloat(at)) + epoch_offset);
+        // CF can normalize nonexistent dates either way; find the first day >= label.
+        while (dateKey(day.date) < dateKey(date)) day = try self.dayAt(day.end_utc_seconds);
+        while (dateKey(day.date) > dateKey(date)) {
+            const previous = try self.dayAt(day.start_utc_seconds - 1);
+            if (dateKey(previous.date) < dateKey(date)) break;
+            day = previous;
+        }
+        return day.start_utc_seconds;
+    }
+
     /// Monday through next Monday in the configured zone, including DST changes.
     pub fn weekAt(self: Zone, utc_seconds: i64) !Interval {
         _ = try self.dayAt(utc_seconds);
@@ -105,6 +128,30 @@ pub const Zone = struct {
         };
     }
 };
+
+fn dateKey(date: Date) i64 {
+    return @as(i64, date.year) * 10000 + @as(i64, date.month) * 100 + date.day;
+}
+
+test "date-label cutoffs honor DST, repeated midnight, skipped dates, and validation" {
+    var la = try Zone.init("America/Los_Angeles");
+    defer la.deinit();
+    for ([_]struct { month: i32, day: i32, hours: i64 }{ .{ .month = 3, .day = 10, .hours = 23 }, .{ .month = 11, .day = 3, .hours = 25 } }) |case| {
+        const interval = try la.intervalForDates(.{ .year = 2024, .month = case.month, .day = case.day }, .{ .year = 2024, .month = case.month, .day = case.day + 1 });
+        try std.testing.expectEqual(case.hours * 3600, interval.end_utc_seconds - interval.start_utc_seconds);
+    }
+    var havana = try Zone.init("America/Havana");
+    defer havana.deinit();
+    const repeated = try havana.intervalForDates(.{ .year = 2024, .month = 11, .day = 3 }, .{ .year = 2024, .month = 11, .day = 4 });
+    try std.testing.expectEqual(@as(i64, 25 * 3600), repeated.end_utc_seconds - repeated.start_utc_seconds);
+    var apia = try Zone.init("Pacific/Apia");
+    defer apia.deinit();
+    const skipped = try apia.intervalForDates(.{ .year = 2011, .month = 12, .day = 30 }, .{ .year = 2011, .month = 12, .day = 31 });
+    try std.testing.expectEqual(skipped.start_utc_seconds, skipped.end_utc_seconds);
+    const first: Date = .{ .year = 2024, .month = 2, .day = 29 };
+    try std.testing.expectError(error.InvalidDateRange, la.intervalForDates(first, first));
+    try std.testing.expectError(error.InvalidDate, la.intervalForDates(.{ .year = 2023, .month = 2, .day = 29 }, first));
+}
 
 test "system identifier resolution and UTC fallback" {
     const allocator = std.testing.allocator;

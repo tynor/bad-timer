@@ -25,7 +25,7 @@ names; removed activities retain recorded names. `-` means no numeric shortcut
 time today show zero.
 
 ```text
-bad-timer | America/Los_Angeles
+bad-timer | Dates: America/Los_Angeles
 Active: Work
 Elapsed: 00:42:10
 
@@ -112,7 +112,7 @@ Measured on Apple M1 Max (arm64), macOS 27.2.1, Zig 0.17.1, ReleaseSmall:
 
 | Measurement | Result |
 | --- | ---: |
-| Executable size (including summaries and session timezone persistence) | 279,528 bytes |
+| Executable size (including saved-zone cutoff integration) | 279,912 bytes |
 | Empty history | 0 bytes |
 | After start | 155 bytes |
 | After switch | 453 bytes |
@@ -188,8 +188,14 @@ macOS time-zone database and may change with OS updates.
 ## Daily and weekly totals
 
 `src/totals.zig` exposes `calculate(allocator, zone, sessions, live, now)` for the
-local day containing `now`, and `calculateWeek` with the same arguments for the
-containing Monday–Sunday calendar week. `Zone.weekAt` uses CoreFoundation with
+display-zone date containing `now`, and `calculateWeek` with the same arguments
+for the containing Monday–Sunday calendar week. The display zone supplies shared
+date labels only (`Dates:` in the screen header). Each completed/live session's
+saved `time_zone` supplies the UTC cutoffs for those labels; different zones are
+not grouped into separate sections. For example, a session on Jan 1 in Tokyo can
+count under Jan 1 even if its UTC timestamp is Dec 31. The same stable activity ID
+can combine sessions from different zones. Live time can belong to the preceding
+displayed day/week when the saved zone is still on Sunday/its previous date. `Zone.weekAt` uses CoreFoundation with
 Monday fixed as the first weekday, independent of locale; a DST week can have
 167 or 169 hours. Both use the same proportional attribution and cumulative
 nanosecond rounding, including start-date attribution for zero/backward spans.
@@ -208,6 +214,16 @@ session's borrowed ID/name (renames do not create a new activity). The caller fr
 the result slice and keeps input strings alive. Durations accumulate as `u128`
 nanoseconds with checked overflow; invalid query dates, allocation failures, and
 regressing live monotonic readings return errors without changing inputs.
+`calculateDates` applies an explicit half-open date-label range; cutoffs are cached
+per distinct saved zone within each calculation. `calculateInterval` remains a
+low-level fixed-UTC-interval API and does not reinterpret its boundaries. Unzoned
+in-memory inputs use the display zone for compatibility; normal startup already
+assigns legacy history a durable zone before any screen is drawn.
+`Zone.intervalForDates` resolves real calendar boundaries, including repeated or
+missing midnight; a whole skipped date contributes zero rather than aborting.
+Tests cover mixed LA/Tokyo/UTC day and week cutoffs, year rollover, live saved-zone
+Sunday versus display Monday, 23/25-hour days, 167/169-hour weeks, repeated midnight,
+skipped dates, and conserved nanosecond rounding.
 
 Positive UTC spans distribute measured duration proportionally across actual local
 day boundaries, including DST. Cumulative integer rounding conserves nanoseconds
@@ -386,7 +402,7 @@ The codec itself performs no I/O. Storage uses it for startup replay and transit
 preparation. Startup recovery prompts are described below. Replay currently retains the entire history in
 memory; it does not stream or impose a file-size limit.
 
-### Session timezone persistence (cutoff integration pending)
+### Session timezone persistence and cutoff integration
 
 On start/switch, an explicit configured zone wins; otherwise the system zone is
 resolved again at that start, with UTC fallback. The session's identifier is
@@ -407,10 +423,10 @@ new startup assignment record, but does not resolve or add time to that session.
 Empty/already-zoned histories receive no assignment write. The explicit tail
 recovery command preserves bytes and does not assign zones.
 
-**This PR persists metadata only:** Today/This week and the 7-day/4-week screens
-still calculate using the display zone. The planned follow-up will
-keep shared date labels but interpret each date's cutoffs in each session's saved
-zone; no timezone grouping was requested. Tests cover legacy completed/unfinished
+Today/This week and the 7-day/4-week screens now keep shared display-zone date
+labels but interpret each date's cutoffs in each session's saved zone, including
+live sessions; there is no timezone grouping. Config changes affect shared labels
+but never replace saved session zones. History and CSV are not changed by browsing. Tests cover legacy completed/unfinished
 assignment, exact prefix preservation, owned zone names, atomic switches, restart,
 config changes, malformed/version validation, and write/sync failure blocking.
 Actual OS timezone changes during a running process were not manually tested.

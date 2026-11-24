@@ -38,7 +38,7 @@ pub fn calculate(allocator: std.mem.Allocator, zone: tz.Zone, sessions: []const 
         const interval: tz.Interval = if (kind == .weekly) try zone.weekAt(at) else .{ .start_utc_seconds = day.start_utc_seconds, .end_utc_seconds = day.end_utc_seconds };
         const first = (try zone.dayAt(interval.start_utc_seconds)).date;
         const last = (try zone.dayAt(interval.end_utc_seconds - 1)).date;
-        const totals = try timer.totals.calculateInterval(allocator, sessions, live, now, interval);
+        const totals = try timer.totals.calculateDates(allocator, zone, sessions, live, now, .{ .first = first, .end = (try zone.dayAt(interval.end_utc_seconds)).date });
         period.* = .{ .interval = interval, .first = first, .last = last, .totals = totals, .duration_ns = 0 };
         initialized += 1;
         for (totals) |total| period.duration_ns = std.math.add(u128, period.duration_ns, total.duration_ns) catch return error.TotalOverflow;
@@ -46,6 +46,44 @@ pub fn calculate(allocator: std.mem.Allocator, zone: tz.Zone, sessions: []const 
         at = interval.start_utc_seconds - 1;
     }
     return .{ .allocator = allocator, .periods = periods };
+}
+
+test "summary windows share labels but use per-session zones with conserved rounding" {
+    var display = try tz.Zone.init("UTC");
+    defer display.deinit();
+    const activity: timer.Activity = .{ .id = "removed", .name = "Removed" };
+    var sessions = [_]timer.Session{
+        .{ .activity = activity, .start_utc_ns = 1704697200 * @as(i128, std.time.ns_per_s), .end_utc_ns = 1704697200 * @as(i128, std.time.ns_per_s), .duration_ns = 7, .time_zone = "America/Los_Angeles" }, // Jan 7 locally, Jan 8 UTC.
+        .{ .activity = activity, .start_utc_ns = 1704038400 * @as(i128, std.time.ns_per_s), .end_utc_ns = 1704038400 * @as(i128, std.time.ns_per_s), .duration_ns = 11, .time_zone = "Asia/Tokyo" },
+        .{ .activity = activity, .start_utc_ns = 1704070800 * @as(i128, std.time.ns_per_s), .end_utc_ns = 1704070800 * @as(i128, std.time.ns_per_s), .duration_ns = 13, .time_zone = "America/Los_Angeles" }, // Dec 31 locally.
+        .{ .activity = activity, .start_utc_ns = 1704095999 * @as(i128, std.time.ns_per_s), .end_utc_ns = 1704096002 * @as(i128, std.time.ns_per_s), .duration_ns = 10, .time_zone = "America/Los_Angeles" },
+    };
+    // A backward span belongs to its start date in its saved zone.
+    sessions[2].end_utc_ns -= std.time.ns_per_s;
+    const now: timer.Instant = .{ .monotonic_ns = 5, .utc_ns = 1704110400 * @as(i128, std.time.ns_per_s) };
+    const live: timer.Timer = .{ .running = .{ .activity = .{ .id = "removed", .name = "Renamed" }, .start = .{ .monotonic_ns = 0, .utc_ns = now.utc_ns - 10 }, .time_zone = "Asia/Tokyo" } };
+    for ([_]Kind{ .daily, .weekly }) |kind| {
+        var report = try calculate(std.testing.allocator, display, &sessions, live, now, kind);
+        defer report.deinit();
+        try std.testing.expectEqualDeep(tz.Date{ .year = 2024, .month = 1, .day = 1 }, report.periods[0].first);
+        try std.testing.expectEqual(@as(u128, if (kind == .daily) 23 else 30), report.periods[0].duration_ns);
+        try std.testing.expectEqual(@as(u128, 16), report.periods[1].duration_ns);
+        try std.testing.expectEqual(@as(usize, 1), report.periods[0].totals.len);
+        for (report.periods[2..]) |period| try std.testing.expectEqual(@as(u128, 0), period.duration_ns);
+    }
+}
+
+test "live saved-zone Sunday stays in prior day and week despite Monday display labels" {
+    var display = try tz.Zone.init("UTC");
+    defer display.deinit();
+    const live: timer.Timer = .{ .running = .{ .activity = .{ .id = "work", .name = "Work" }, .start = .{ .monotonic_ns = 0, .utc_ns = 1704067200 * @as(i128, std.time.ns_per_s) }, .time_zone = "America/Los_Angeles" } };
+    const now: timer.Instant = .{ .monotonic_ns = 10, .utc_ns = 1704070800 * @as(i128, std.time.ns_per_s) };
+    for ([_]Kind{ .daily, .weekly }) |kind| {
+        var report = try calculate(std.testing.allocator, display, &.{}, live, now, kind);
+        defer report.deinit();
+        try std.testing.expectEqual(@as(u128, 0), report.periods[0].duration_ns);
+        try std.testing.expectEqual(@as(u128, 10), report.periods[1].duration_ns);
+    }
 }
 
 test "fixed windows include current period, empty periods, and live split across Monday" {

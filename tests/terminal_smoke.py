@@ -288,6 +288,57 @@ with tempfile.TemporaryDirectory(prefix="bad-timer-summaries-") as directory:
         os.close(master)
         os.close(slave)
 
+# Mixed saved zones use shared UTC date labels, not a single UTC cutoff interval.
+with tempfile.TemporaryDirectory(prefix="bad-timer-zone-cutoffs-") as directory:
+    root = Path(directory)
+    config = root / "config.json"
+    history = root / "history.jsonl"
+    today = datetime.now(ZoneInfo("UTC")).replace(hour=0, minute=0, second=0, microsecond=0)
+    monday = today - timedelta(days=today.weekday())
+    config.write_text(json.dumps({"time_zone": "UTC", "activities": [{"id": "work", "name": "Work"}]}))
+    fixtures = [(today, 23, "America/Los_Angeles", "work", "Old work", 7),
+                (today, 0, "Asia/Tokyo", "work", "Renamed work", 11),
+                (monday - timedelta(days=1), 23, "America/Los_Angeles", "prior", "Prior week", 13),
+                (monday + timedelta(days=7), 0, "Asia/Tokyo", "future", "Following week", 17)]
+    events = []
+    for session_id, (date, hour, saved_zone, id_, name, seconds) in enumerate(fixtures, 1):
+        local = date.replace(tzinfo=ZoneInfo(saved_zone), hour=hour)
+        ns = int(local.timestamp()) * 1_000_000_000
+        activity = {"id": id_, "name": name}
+        events.extend([
+            {"version": 2, "change": {"start": {"session_id": session_id, "activity": activity, "start_utc_ns": ns, "time_zone": saved_zone}}},
+            {"version": 2, "change": {"stop": {"session_id": session_id, "activity": activity, "end_utc_ns": ns, "duration_ns": seconds * 1_000_000_000}}},
+        ])
+    history.write_text("".join(json.dumps(event) + "\n" for event in events))
+    before = history.read_bytes()
+    for _ in range(2):  # Replay preserves the same date attribution.
+        process, master, slave, original = launch(args=("--config", str(config), "--history", str(history)))
+        try:
+            screen = receive_frame(master, b"Stopped")
+            assert b"00:00:18  00:00:18  Work" in screen
+            assert b"Prior week" not in screen and b"Following week" not in screen
+            os.write(master, b"d")
+            daily = receive_frame(master, b"Daily summaries")
+            assert f"{today:%Y-%m-%d} | 00:00:18 (current)".encode() in daily
+            assert b"00:00:18  Work" in daily
+            os.write(master, b"\x1b")
+            receive_frame(master, b"Stopped")
+            os.write(master, b"w")
+            weekly = receive_frame(master, b"Weekly summaries")
+            assert f"{monday:%Y-%m-%d}..{monday + timedelta(days=6):%Y-%m-%d} | 00:00:18".encode() in weekly
+            assert b"00:00:13  Prior week" in weekly and b"Following week" not in weekly
+            assert history.read_bytes() == before
+            os.write(master, b"q")
+            receive(master, b"\x1b[?25h\x1b[?1049l")
+            assert process.wait(timeout=5) == 0, process.stderr.read()
+            assert termios.tcgetattr(master) == original
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            os.close(master)
+            os.close(slave)
+
 # Configured-zone totals include removed activities, exclude yesterday, and survive restart.
 with tempfile.TemporaryDirectory(prefix="bad-timer-totals-") as directory:
     history = Path(directory) / "history.jsonl"
@@ -312,7 +363,7 @@ with tempfile.TemporaryDirectory(prefix="bad-timer-totals-") as directory:
         process, master, slave, original = launch(args=("--config", str(config), "--history", str(history)))
         try:
             screen = receive(master, b"\x1b[?7h")
-            assert b"bad-timer | Pacific/Kiritimati" in screen
+            assert b"bad-timer | Dates: Pacific/Kiritimati" in screen
             assert b"00:00:07  00:00:07  Removed" in screen and b"Last week" not in screen
             assert b"This week" in screen
             if midnight.weekday() == 0:

@@ -625,7 +625,7 @@ fn drawSummary(config: Config, kind: timer.summaries.Kind, report: timer.summari
     var screen = Screen{ .rows = rows - @intFromBool(footer) };
     var buffer: [256]u8 = undefined;
     if (header and try screen.line()) {
-        try output(if (kind == .daily) "Daily summaries | " else "Weekly summaries | ");
+        try output(if (kind == .daily) "Daily summaries | Dates: " else "Weekly summaries | Dates: ");
         try activityName(config.timeZone());
         try output(try std.fmt.bufPrint(&buffer, " | ^{d} v{d}", .{ scroll.*, count - @min(scroll.* + capacity, count) }));
     }
@@ -675,7 +675,7 @@ fn draw(config: Config, live: timer.Timer, seconds: u64, status: []const u8, tot
     var screen = Screen{ .rows = rows - 1 - status_rows };
     var buffer: [256]u8 = undefined;
     if (rows >= 8 and try screen.line()) {
-        try output("bad-timer | ");
+        try output("bad-timer | Dates: ");
         try activityName(config.timeZone());
     }
     if (try screen.line()) {
