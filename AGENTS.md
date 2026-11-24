@@ -39,6 +39,13 @@ inputs and cancellation leave history unchanged. Recovery also accepts Go
 `time.ParseDuration` syntax through `u`, rejecting negative results and requiring
 confirmation of duration and derived UTC end before saving. Go-generated fixtures
 verify parsing compatibility; input is limited to 256 UTF-8 bytes.
+Recovery now uses a bounded, no-wrap header/footer layout, shows the historical
+activity and readable UTC start/end with nine fractional digits, and formats
+review durations as HH:MM:SS.nnnnnnnnn. The shared tested CSV timestamp formatter
+also serves recovery display; unsupported years get an explicit range label.
+Saving confirmation is disabled below 60 columns × 10 rows until resize so the
+review details/warnings remain visible. PTY checks cover fractions, historical
+identity, clipped review, disabled blind confirmation, resize, and unchanged history.
 Numeric keys now start/stop/switch activities, persisting and syncing before
 committing live timer state. The screen shows assigned keys, active activity,
 and elapsed seconds; clean quit and handled termination stop/save a live session.

@@ -65,7 +65,8 @@ fn text(writer: *std.Io.Writer, value: []const u8) !void {
     try writer.writeByte('"');
 }
 
-fn timestamp(writer: *std.Io.Writer, ns: i128) !void {
+/// Exact UTC text shared by CSV and recovery display; supports years 1–9999.
+pub fn timestamp(writer: *std.Io.Writer, ns: i128) !void {
     const seconds = @divFloor(ns, std.time.ns_per_s);
     if (seconds < -62135596800 or seconds > 253402300799) return error.TimestampOutOfRange;
     var days = @divFloor(seconds, 86400);

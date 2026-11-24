@@ -8,6 +8,8 @@ test {
     _ = @import("recovery.zig");
 }
 
+const RecoveryMode = enum { choice, entry, confirm };
+
 var stopping = std.atomic.Value(bool).init(false);
 var resized = std.atomic.Value(bool).init(false);
 
@@ -175,7 +177,8 @@ fn run(init: std.process.Init) !void {
     defer output("\x1b[?25h\x1b[?1049l") catch {};
     try output("\x1b[?1049h\x1b[?25l");
 
-    var recovery_mode: enum { choice, entry, confirm } = .choice;
+    var recovery_mode: RecoveryMode = .choice;
+    var recovery_visible = false;
     var duration_entry = false;
     var end_input: [256]u8 = undefined;
     var end_length: usize = 0;
@@ -202,24 +205,7 @@ fn run(init: std.process.Init) !void {
         last_day = day.start_utc_seconds;
         if (dirty) {
             if (if (live.running == null) store.history.unfinished else null) |session| {
-                var buffer: [768]u8 = undefined;
-                try output(try std.fmt.bufPrint(&buffer, "\x1b[H\x1b[2JUnfinished session {d}\r\nNo time will be counted automatically.\r\nd: discard unfinished session (adds no time)\r\nt: supply UTC end time\r\nu: supply duration (Go format)\r\nq / Ctrl-C: exit without changing history\r\n", .{session.session_id}));
-                switch (recovery_mode) {
-                    .choice => {},
-                    .entry => {
-                        try output(if (duration_entry) "Duration (e.g. 1h30m, 2.5h, 300ms); Enter: review; Esc: cancel\r\n" else "End UTC (YYYY-MM-DDTHH:MM:SSZ); Enter: review; Esc: cancel\r\n");
-                        try output(end_input[0..end_length]);
-                        if (recovery_error) try output(if (duration_entry) "\r\nInvalid duration, negative result, or input/value exceeds range. Esc: restart.\r\n" else "\r\nInvalid end time, before start, or input/duration exceeds range. Esc: restart.\r\n");
-                    },
-                    .confirm => {
-                        if (duration_entry) {
-                            try output(try std.fmt.bufPrint(&buffer, "Supplied duration: {s}\r\nDerived end UTC (Unix nanoseconds): {d}\r\n", .{ end_input[0..end_length], recovered_end }));
-                        } else {
-                            try output(try std.fmt.bufPrint(&buffer, "End UTC: {s}\r\nBased on wall-clock timestamps, not measured elapsed time.\r\n", .{end_input[0..end_length]}));
-                        }
-                        try output(try std.fmt.bufPrint(&buffer, "Recovery duration: {d} seconds + {d} ns\r\ny: confirm and save; Esc: cancel\r\n", .{ recovered_duration / std.time.ns_per_s, recovered_duration % std.time.ns_per_s }));
-                    },
-                }
+                recovery_visible = try drawRecovery(session, recovery_mode, duration_entry, end_input[0..end_length], recovery_error, recovered_end, recovered_duration);
             } else if (menu) |selected| {
                 try drawMenu(config, selected, live);
             } else {
@@ -281,7 +267,7 @@ fn run(init: std.process.Init) !void {
                     }
                 }
             } else if (recovery_mode == .confirm) {
-                if (key == 'y') {
+                if (key == 'y' and recovery_visible) {
                     store.append(init.io, .{ .version = 1, .change = .{ .stop = .{
                         .session_id = session.session_id,
                         .activity = session.activity,
@@ -412,6 +398,76 @@ fn escapeKey() !?u8 {
         }
     }
     return 0;
+}
+
+fn utcText(ns: i128, buffer: []u8) ![]const u8 {
+    var writer = std.Io.Writer.fixed(buffer);
+    timer.csv.timestamp(&writer, ns) catch |err| switch (err) {
+        error.TimestampOutOfRange => return "outside supported UTC range (years 1-9999)",
+        else => return err,
+    };
+    return writer.buffered();
+}
+
+fn drawRecovery(session: timer.history.Start, mode: RecoveryMode, duration_entry: bool, input: []const u8, invalid: bool, end: i128, elapsed: u64) !bool {
+    var size: c.struct_winsize = std.mem.zeroes(c.struct_winsize);
+    if (c.ioctl(c.STDOUT_FILENO, c.TIOCGWINSZ, &size) != 0) return error.TerminalSizeFailed;
+    try output("\x1b[H\x1b[2J\x1b[?7l");
+    defer output("\x1b[?7h") catch {};
+    const rows: usize = @max(size.ws_row, 1);
+    var screen = Screen{ .rows = rows - 1 };
+    var buffer: [256]u8 = undefined;
+    if (try screen.line()) try output(try std.fmt.bufPrint(&buffer, "Recovery | Unfinished session {d}", .{session.session_id}));
+    if (try screen.line()) {
+        try output("Activity: ");
+        try activityName(session.activity.name);
+    }
+    if (try screen.line()) {
+        try output("Start UTC: ");
+        try output(try utcText(session.start_utc_ns, &buffer));
+    }
+    if (try screen.line()) try output("No time will be counted automatically.");
+    switch (mode) {
+        .choice => {
+            if (try screen.line()) try output("d: discard unfinished session (adds no time)");
+            if (try screen.line()) try output("t: supply UTC end time");
+            if (try screen.line()) try output("u: supply duration (Go format)");
+        },
+        .entry => {
+            if (try screen.line()) try output(if (duration_entry) "Duration (e.g. 1h30m, 2.5h, 300ms):" else "End UTC (YYYY-MM-DDTHH:MM:SSZ):");
+            if (try screen.line()) try activityName(input);
+            if (invalid and try screen.line()) try output(if (duration_entry) "Invalid duration, negative result, or input/value exceeds range." else "Invalid end time, before start, or input/duration exceeds range.");
+        },
+        .confirm => {
+            if (try screen.line()) try output(if (duration_entry) "Duration supplied by you; not measured elapsed time." else "Based on wall-clock timestamps, not measured elapsed time.");
+            if (try screen.line()) {
+                try output("End UTC: ");
+                try output(try utcText(end, &buffer));
+            }
+            if (try screen.line()) {
+                try output("Recovery duration: ");
+                try output(try duration(&buffer, elapsed / std.time.ns_per_s));
+                try output(try std.fmt.bufPrint(&buffer, ".{d:0>9}", .{elapsed % std.time.ns_per_s}));
+            }
+            if (duration_entry and try screen.line()) {
+                try output("Supplied duration: ");
+                try activityName(input);
+            }
+        },
+    }
+    const visible = rows >= 10 and size.ws_col >= 60;
+    if ((screen.clipped or (mode == .confirm and !visible)) and screen.rows > 0)
+        try output(try std.fmt.bufPrint(&buffer, "\x1b[{d};1H\x1b[2KEnlarge terminal to review (60x10)", .{screen.rows}));
+    try output(try std.fmt.bufPrint(&buffer, "\x1b[{d};1H", .{rows}));
+    try output(if (mode == .confirm and visible) "y: confirm and save; Esc: cancel | q: quit" else if (size.ws_col < 40) "Esc: back | q: quit" else if (mode == .entry) "Enter: review; Esc: cancel | q: quit" else "q / Ctrl-C: exit without changing history");
+    return visible;
+}
+
+test "recovery UTC display preserves fractions and handles unsupported dates" {
+    var buffer: [256]u8 = undefined;
+    try std.testing.expectEqualStrings("1969-12-31T23:59:59.999999999Z", try utcText(-1, &buffer));
+    try std.testing.expectEqualStrings("1970-01-01T00:00:00.002501100Z", try utcText(2501100, &buffer));
+    try std.testing.expectEqualStrings("outside supported UTC range (years 1-9999)", try utcText(std.math.maxInt(i128), &buffer));
 }
 
 fn drawMenu(config: Config, selected: usize, live: timer.Timer) !void {

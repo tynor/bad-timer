@@ -338,7 +338,11 @@ can ignore advisory locks. Local macOS filesystems are the intended target.
 
 Corrupt or incomplete input aborts startup with its path and reason, without
 repair, truncation, or skipped records. Preserve the file for future recovery.
-An unfinished session opens a recovery prompt showing its session ID. Press `d`
+An unfinished session opens a recovery screen showing its session ID, historical
+activity name, and start as a readable UTC timestamp with nine fractional digits.
+The screen uses the same bounded, no-wrap layout as the main screen, with controls
+at the bottom and an explicit warning that no time is counted automatically.
+Press `d`
 to explicitly discard it without adding completed time, or `q` / Ctrl-C to exit
 without changing history. Press `t` to enter an end time as `YYYY-MM-DDTHH:MM:SSZ`
 (explicit UTC, whole seconds, years 0001–9999). Backspace edits; Enter validates
@@ -356,9 +360,14 @@ are not accepted. Fractions truncate to nanoseconds per component, as in Go.
 The optional leading sign and Go's signed 64-bit nanosecond range apply, but
 negative results are rejected for recovery (negative values truncating to zero
 are accepted). The end is derived as the original start plus supplied duration.
-Review shows the duration and derived end as UTC Unix nanoseconds; `y` saves,
-Escape cancels. This is an explicit estimate, not measured elapsed time.
-Entry is limited to 256 UTF-8 bytes; overflow requires Escape and re-entry.
+Review shows the derived end as a UTC timestamp and duration as
+`HH:MM:SS.nnnnnnnnn`, preserving exact nanosecond precision. `y` saves; Escape
+cancels. This is an explicit estimate, not measured elapsed time.
+Confirmation requires at least 60 columns × 10 rows so the review details and
+warnings fit; on smaller terminals `y` is disabled until resize. Quit/cancel
+remain available, and history is unchanged while resizing or reviewing. Dates
+outside years 1–9999 display an explicit range warning rather than raw epoch
+numbers. Entry is limited to 256 UTF-8 bytes; overflow requires Escape and re-entry.
 
 Discard or confirmed stop is persisted and synced
 before the timer screen appears; restarting then opens stopped. Both append

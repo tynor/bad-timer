@@ -415,9 +415,10 @@ for action in (b"q", b"\x03", signal.SIGTERM, b"d", "write_failure"):
         file_size_limit=len(start) if action == "write_failure" else None,
     )
     try:
-        receive(master, b"q / Ctrl-C: exit without changing history")
-        os.write(master, b"1a\r")  # Unrelated keys cannot resolve recovery.
-        receive(master, b"Unfinished session 7")
+        receive_frame(master, b"q / Ctrl-C: exit without changing history")
+        for key in (b"1", b"a", b"\r"):  # Unrelated keys cannot resolve recovery.
+            os.write(master, key)
+            receive_frame(master, b"Unfinished session 7")
         assert history.read_bytes() == start
         if action == "write_failure":
             os.write(master, b"d")
@@ -474,19 +475,40 @@ for action, duration_input in [(a, d) for d in (False, True) for a in ("save", "
         file_size_limit=len(start) if action == "failure" else None,
     )
     try:
-        receive(master, b"t: supply UTC end time")
+        initial = receive_frame(master, b"t: supply UTC end time")
+        assert b"Activity: Old name" in initial
+        assert b"Start UTC: 1970-01-01T00:00:00.000000100Z" in initial
+        assert b"No time will be counted automatically." in initial
         os.write(master, b"u-1s\r" if duration_input else b"t1969-12-31T23:59:59Z\r")
         receive(master, b"Invalid duration" if duration_input else b"Invalid end time")
         assert history.read_bytes() == start
         if duration_input:
             os.write(master, b"\x1bu" + b"0s" * 128 + b"1h\r")
-            receive(master, b"Esc: restart.")
+            receive_frame(master, b"Invalid duration")
             assert history.read_bytes() == start
         os.write(master, "\x1bu1µs2.5ms\r".encode() if duration_input else b"\x1bt1970-01-01T00:00:01Z\r")
-        review = receive(master, b"y: confirm and save")
+        review = receive_frame(master, b"y: confirm and save")
+        assert b"Unix nanoseconds" not in review
         if duration_input:
-            assert b"Derived end UTC (Unix nanoseconds): 2501100" in review
+            assert b"End UTC: 1970-01-01T00:00:00.002501100Z" in review
+            assert b"Recovery duration: 00:00:00.002501000" in review
+        else:
+            assert b"End UTC: 1970-01-01T00:00:01.000000000Z" in review
+            assert b"Recovery duration: 00:00:00.999999900" in review
+            assert b"Based on wall-clock timestamps, not measured elapsed time." in review
         assert history.read_bytes() == start
+        if action == "save":
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 4, 30, 0, 0))
+            process.send_signal(signal.SIGWINCH)
+            small = receive_frame(master, b"Enlarge terminal to review")
+            assert b"\x1b[4;1HEsc: back | q: quit" in small
+            assert b"y: confirm and save" not in small and b"\x1b[5;1H" not in small
+            os.write(master, b"y")
+            receive_frame(master, b"Enlarge terminal to review")
+            assert history.read_bytes() == start, "must not confirm hidden recovery details"
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+            process.send_signal(signal.SIGWINCH)
+            receive_frame(master, b"y: confirm and save")
         if action in ("save", "failure"):
             os.write(master, b"y")
             if action == "save":
