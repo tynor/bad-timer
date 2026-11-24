@@ -13,11 +13,37 @@ pub const Day = struct {
     end_utc_seconds: i64,
 };
 
+/// Owned UTF-8 system identifier, or UTC if unavailable/unsupported. Caller frees.
+pub fn systemName(allocator: std.mem.Allocator) ![]const u8 {
+    const zone = c.CFTimeZoneCopySystem();
+    defer if (zone != null) c.CFRelease(zone);
+    return systemNameFrom(allocator, zone);
+}
+
+fn systemNameFrom(allocator: std.mem.Allocator, zone: c.CFTimeZoneRef) ![]const u8 {
+    if (zone) |value| {
+        var buffer: [1025]u8 = undefined;
+        if (c.CFStringGetCString(c.CFTimeZoneGetName(value), &buffer, buffer.len, c.kCFStringEncodingUTF8) != 0) {
+            const name = std.mem.sliceTo(&buffer, 0);
+            if (Zone.init(name)) |resolved| {
+                var validated = resolved;
+                defer validated.deinit();
+                return allocator.dupe(u8, name);
+            } else |err| switch (err) {
+                error.InvalidTimeZone => {},
+                else => return err,
+            }
+        }
+    }
+    return allocator.dupe(u8, "UTC");
+}
+
 /// Owns a CoreFoundation calendar; do not copy, and call deinit exactly once.
 pub const Zone = struct {
     calendar: c.CFCalendarRef,
 
-    /// Omitted names use UTC. Only exact system IANA identifiers are accepted.
+    /// Null explicitly selects UTC; app defaults resolve systemName first.
+    /// Only exact system IANA identifiers are accepted.
     pub fn init(name: ?[]const u8) !Zone {
         const bytes = name orelse "UTC";
         if (bytes.len == 0 or bytes.len > 1024 or std.mem.indexOfScalar(u8, bytes, 0) != null)
@@ -79,7 +105,30 @@ pub const Zone = struct {
     }
 };
 
-test "zone validation and UTC default" {
+test "system identifier resolution and UTC fallback" {
+    const allocator = std.testing.allocator;
+    const missing = try systemNameFrom(allocator, null);
+    defer allocator.free(missing);
+    try std.testing.expectEqualStrings("UTC", missing);
+    const text = c.CFStringCreateWithCString(null, "America/Los_Angeles", c.kCFStringEncodingUTF8) orelse return error.OutOfMemory;
+    defer c.CFRelease(text);
+    const zone = c.CFTimeZoneCreateWithName(null, text, 0) orelse return error.InvalidTimeZone;
+    defer c.CFRelease(zone);
+    const name = try systemNameFrom(allocator, zone);
+    defer allocator.free(name);
+    try std.testing.expectEqualStrings("America/Los_Angeles", name);
+    const unsupported = c.CFTimeZoneCreateWithTimeIntervalFromGMT(null, 3600) orelse return error.OutOfMemory;
+    defer c.CFRelease(unsupported);
+    const fallback = try systemNameFrom(allocator, unsupported);
+    defer allocator.free(fallback);
+    try std.testing.expectEqualStrings("UTC", fallback);
+    const actual = try systemName(allocator);
+    defer allocator.free(actual);
+    var actual_zone = try Zone.init(actual);
+    actual_zone.deinit();
+}
+
+test "zone validation and explicit UTC default" {
     for ([_][]const u8{ "", "Not/A_Zone", "GMT+123", "America/Los_Angeles\x00junk", "\xff" }) |name| {
         try std.testing.expectError(error.InvalidTimeZone, Zone.init(name));
     }

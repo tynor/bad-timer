@@ -16,16 +16,18 @@ pub const Total = struct {
 pub fn calculate(allocator: std.mem.Allocator, zone: tz.Zone, sessions: []const timer.Session, live: timer.Timer, now: timer.Instant) ![]Total {
     const seconds = std.math.cast(i64, @divFloor(now.utc_ns, ns_per_second)) orelse return error.TimestampOutOfRange;
     const day = try zone.dayAt(seconds);
-    return calculateFor(allocator, sessions, live, now, day);
+    return calculateInterval(allocator, sessions, live, now, .{ .start_utc_seconds = day.start_utc_seconds, .end_utc_seconds = day.end_utc_seconds });
 }
 
 /// Same ownership/attribution as calculate, for the current Monday–Sunday week.
 pub fn calculateWeek(allocator: std.mem.Allocator, zone: tz.Zone, sessions: []const timer.Session, live: timer.Timer, now: timer.Instant) ![]Total {
     const seconds = std.math.cast(i64, @divFloor(now.utc_ns, ns_per_second)) orelse return error.TimestampOutOfRange;
-    return calculateFor(allocator, sessions, live, now, try zone.weekAt(seconds));
+    return calculateInterval(allocator, sessions, live, now, try zone.weekAt(seconds));
 }
 
-fn calculateFor(allocator: std.mem.Allocator, sessions: []const timer.Session, live: timer.Timer, now: timer.Instant, day: anytype) ![]Total {
+/// Same ownership rules, for a caller-selected half-open calendar interval.
+pub fn calculateInterval(allocator: std.mem.Allocator, sessions: []const timer.Session, live: timer.Timer, now: timer.Instant, day: tz.Interval) ![]Total {
+    if (day.end_utc_seconds <= day.start_utc_seconds) return error.InvalidInterval;
     var totals: std.ArrayList(Total) = .empty;
     errdefer totals.deinit(allocator);
     for (sessions) |session| try add(allocator, &totals, session, day);
@@ -191,6 +193,7 @@ test "weekly DST shares use calendar boundaries and include live Monday crossing
 }
 
 test "empty history and invalid query dates" {
+    try std.testing.expectError(error.InvalidInterval, calculateInterval(std.testing.allocator, &.{}, .{}, .{ .monotonic_ns = 0, .utc_ns = 0 }, .{ .start_utc_seconds = 1, .end_utc_seconds = 1 }));
     var zone = try tz.Zone.init(null);
     defer zone.deinit();
     const result = try calculate(std.testing.allocator, zone, &.{}, .{}, .{ .monotonic_ns = 0, .utc_ns = -1 });

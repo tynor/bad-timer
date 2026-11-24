@@ -14,7 +14,8 @@ The header shows selection position (`10/12`) and hidden-row counts (`^8 v2` mea
 8 above, 2 below). Navigation help stays at the bottom. On one- or two-row screens,
 position moves beside the selected item; at one row help is omitted so selection
 remains visible. Names clip without wrapping, and resizing preserves selection.
-Press `e` outside the menu to export completed sessions as CSV (details below).
+Press `e` outside menus/summaries to export completed sessions as CSV (details below).
+Press `d` for daily summaries or `w` for weekly summaries (details below).
 Today and This week totals include completed and running time in the configured
 zone, shown as `HH:MM:SS` in one list alongside activity shortcuts. Weeks start
 Monday at local midnight and end at the following Monday, including DST changes. `>` marks the
@@ -33,7 +34,7 @@ Key  Today     This week  Activity (> running)
   2  00:12:00  01:10:00  Break
   -  00:08:20  00:08:20  Old task
 
-1-9: toggle | a: activities | e: export | q: quit
+1-9: toggle | a: activities | d: days | w: weeks | e: export | q: quit
 ```
 
 The controls footer stays at the bottom, with export status immediately above it.
@@ -111,7 +112,7 @@ Measured on Apple M1 Max (arm64), macOS 27.2.1, Zig 0.17.1, ReleaseSmall:
 
 | Measurement | Result |
 | --- | ---: |
-| Executable size (including recovery CLI, cleaned-up TUI, weekly totals) | 278,248 bytes |
+| Executable size (including summaries and system timezone default) | 279,560 bytes |
 | Empty history | 0 bytes |
 | After start | 124 bytes |
 | After switch | 391 bytes |
@@ -120,6 +121,8 @@ Measured on Apple M1 Max (arm64), macOS 27.2.1, Zig 0.17.1, ReleaseSmall:
 | History changes from export and stopped quit | None |
 
 History byte counts vary with timestamp/duration digit lengths and activity names.
+An earlier summary-screen build measured 2,691,368 bytes; that result did not recur
+in the latest ReleaseSmall verification. Its cause has not been investigated.
 CPU and RSS measurements were **skipped at user request** after sandbox denial of
 `ps`; the provisional <1% CPU and <20 MiB RSS targets remain unverified. This
 script does not use `ps` or substitute another process-inspection mechanism.
@@ -169,8 +172,11 @@ for this check. Record macOS version and measured deltas; the automated tests
 neither suspend the host nor prove real suspend behavior.
 
 `src/time_zone.zig` uses CoreFoundation's system IANA zone list and Gregorian
-calendar, without changing process-global `TZ`. Omitted zones default to `UTC`;
-empty, malformed, and unknown identifiers are rejected. Its owned calendar must
+calendar, without changing process-global `TZ`. Configs with no zone resolve the
+macOS system identifier once at startup, falling back to `UTC` if unavailable or
+unsupported. Explicit empty, malformed, and unknown identifiers are rejected.
+`systemName` returns an owned UTF-8 identifier; low-level `Zone.init(null)` still
+explicitly selects UTC for deterministic callers. Its owned calendar must
 be released with `deinit` and not copied. `dayAt` takes integer Unix UTC seconds
 and returns a local date plus a half-open UTC day interval; this is not duration
 accounting; `src/totals.zig` handles session attribution separately. It accepts seconds
@@ -190,7 +196,7 @@ nanosecond rounding, including start-date attribution for zero/backward spans.
 Weekly attribution is calculated directly over the whole week, not by rounding
 each displayed day's seconds. The screen refreshes at local-day changes (including
 Monday rollover), on timer ticks and transitions; there is no per-second idle redraw.
-There is no previous-week navigation or week-start setting. History and CSV exports
+There is no arbitrary date navigation or week-start setting. History and CSV exports
 remain unchanged; CSV still exports all completed session rows, not aggregates.
 Tests cover Monday/Sunday boundaries, year rollover, configured-zone differences,
 DST, boundary rounding, renames/removal, live Monday crossings, and clock jumps.
@@ -214,6 +220,35 @@ jumps, and timestamp extremes. The TUI shows the configured zone and these total
 refreshing on live elapsed seconds, transitions, and local-day changes. Stopped,
 unchanged screens do not redraw each second. PTY checks cover live updates,
 restart, removed activities, configured-zone attribution, and small-screen resize.
+
+## Daily and weekly summary screens
+
+Outside the activity menu and recovery, `d` opens the last **7 days including
+today**; `w` opens the last **4 Monday–Sunday weeks including this week**. Periods
+appear newest first, labeled with configured-zone dates (weekly ranges show
+Monday through Sunday). Each section shows a total and per-activity breakdown;
+empty periods show zero and `No time recorded`. Current periods are labeled, with
+`in progress` while a timer is running. Displayed totals sum exact nanoseconds
+before formatting as whole-second HH:MM:SS, so fractional row rounding can differ
+from the displayed grand total.
+
+Up/Down scrolls all report rows; Esc returns to the timer. Timers continue running
+and refresh the view each elapsed second. `q`/handled termination still stops and
+saves live time. Activity/menu/export keys are ignored in summaries, so browsing
+cannot change tracking or write history/reports. Header arrows show hidden-row
+counts; small terminals reserve help space and allow scrolling to every row. At
+one row only report content is shown. Resizing clamps the scroll position.
+
+Configured activity IDs use current names; removed IDs retain recorded names.
+`src/summaries.zig` builds owned period/total slices with borrowed identities, using
+the same measured-duration attribution as Today/This week. Previous periods are
+found from the instant before each calendar boundary, not fixed 24-/168-hour
+subtraction. Tests cover DST, years, half-open window limits, live Monday splits,
+empty periods, identity grouping, navigation, no idle redraw, resize, and live
+quit-saving. Reports are recomputed on redraw and scan history per period;
+large-history resource scaling remains unverified. No summary CSV export or
+navigation beyond these fixed windows is included; session CSV/history formats
+are unchanged.
 
 ## Explicit incomplete-tail recovery
 
@@ -461,8 +496,13 @@ created or modified. Fix the file and restart; there is no live reload.
 }
 ```
 
-`time_zone` defaults to `UTC` when omitted; explicit null, empty, or unknown
-zones are rejected. At least one activity is required. IDs must be unique and
+When `time_zone` is omitted, the app uses the macOS system timezone, with `UTC`
+as a fallback if the system identifier is unavailable or unsupported. The resolved
+zone is shown on screen and stays fixed until restart, including if the system
+zone changes while running. Explicit null, empty, or unknown zones are rejected.
+**Changed default:** omitted-zone configs now use local calendar boundaries for
+daily/weekly totals; set `"time_zone": "UTC"` to retain the previous behavior.
+Persisted timestamps and CSV remain UTC and existing history is not rewritten. At least one activity is required. IDs must be unique and
 nonblank; names must be nonblank (blank means only ASCII spaces, tabs, CR, or LF).
 Strings are preserved without trimming; IDs are case-sensitive. Malformed JSON,
 missing required fields, wrong types, duplicate fields, and unknown fields are

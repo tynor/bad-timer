@@ -30,8 +30,9 @@ export recorded sessions as CSV. No account, network, daemon, or background serv
 - Edit a small JSON config file to add, rename, remove, or reorder activities and
   set a display time zone; restart to apply. Reordering changes numeric keys, not
   historical identity. No in-app configuration editor in the MVP.
-- Propose an IANA time-zone name (for example, `America/Los_Angeles`), defaulting
-  to `UTC` when omitted. Reject unknown zones. Render session times and compute
+- Accept an IANA time-zone name (for example, `America/Los_Angeles`), defaulting
+  to the macOS system zone when omitted, with `UTC` as a fallback. Reject unknown
+  explicit zones. Render session times and compute
   today's totals/day boundaries in that zone, including daylight-saving changes;
   show the configured zone in the UI. Stored timestamps and CSV remain UTC.
 - Keep stable IDs and record activity names with sessions so later config edits
@@ -172,7 +173,7 @@ User feedback establishes these constraints:
 Approved defaults:
 
 1. **Customization:** JSON config edited outside the app; IANA display zone,
-   default `UTC`; menu navigation with Up/Down, Enter, and Escape.
+   default system timezone with UTC fallback; menu navigation with Up/Down, Enter, and Escape.
 2. **Controls:** selecting the running activity stops it; another switches;
    `q` quits and `e` exports outside the menu.
 3. **Time policy:** suspend counts; clean exit stops; crash recovery asks rather than guesses.
@@ -200,3 +201,33 @@ PTY checks for weekly display, restart, live updates, and small-screen resizing.
 History format and session-level CSV exports are unchanged. No prior-week
 navigation, date filters, aggregate CSV export, or week-start configuration is
 included. This extends on-screen totals only; the other exclusions still apply.
+
+## 7. Approved extension: fixed daily/weekly summary screens
+
+The user approved separate in-TUI summary screens: `d` for today plus the prior
+six configured-zone days; `w` for this Monday–Sunday week plus the prior three
+weeks. Show newest-first date/range sections with grand totals and per-activity
+breakdowns, retaining removed activities, live time, and explicit empty periods.
+Label current periods and indicate in-progress timing. Use the existing measured
+duration attribution and HH:MM:SS display rules.
+
+Up/Down scrolls all rows; Esc returns without changing tracking. `q` still cleanly
+stops/saves live time. Preserve safe clipping, synchronized updates, and controls
+on small screens. Activity/export keys do not act inside summaries.
+
+Acceptance: deterministic calendar/DST/year/window-limit and live-attribution tests,
+plus PTY checks for both windows, scrolling/resize, read-only browsing, no idle
+redraw, live updates, and clean quit saving. History/CSV formats remain unchanged.
+This supersedes the lack of historical on-screen summaries in section 6, but does
+not add arbitrary date navigation, configurable week starts, or aggregate CSV export.
+
+## 8. Approved default change: system timezone
+
+When `time_zone` is omitted, resolve the macOS system timezone once during startup
+config loading, falling back to UTC if unavailable or unsupported. Explicit zones
+still override this default; null, empty, and invalid explicit values remain errors.
+Show the resolved name in the timer and summary screens and keep it fixed until
+restart. Acceptance includes deterministic resolution/fallback and explicit-override
+tests, existing calendar attribution tests, and PTY checks. Omitted-zone configs
+may now attribute time to different days/weeks; explicit `"time_zone": "UTC"`
+preserves the old calendar behavior. History and UTC CSV formats are unchanged.

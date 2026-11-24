@@ -197,6 +197,93 @@ with tempfile.TemporaryDirectory(prefix="bad-timer-recovery-cli-") as directory:
     assert result.returncode == 1 and b"RequiresInteractiveTTY" in result.stderr
     assert not destination.exists()
 
+# Summary screens use calendar windows, remain read-only, scroll, and retain live time.
+with tempfile.TemporaryDirectory(prefix="bad-timer-summaries-") as directory:
+    root = Path(directory)
+    config = root / "config.json"
+    history = root / "history.jsonl"
+    zone = ZoneInfo("Pacific/Kiritimati")
+    today = datetime.now(zone).replace(hour=0, minute=0, second=0, microsecond=0)
+    monday = today - timedelta(days=today.weekday())
+    config.write_text(json.dumps({"time_zone": zone.key, "activities": [{"id": "work", "name": "Work"}]}))
+    fixtures = [(today, "Removed", 7), (today - timedelta(days=6), "Six days ago", 6),
+                (monday - timedelta(weeks=3), "Three weeks ago", 13),
+                (monday - timedelta(weeks=4), "Outside window", 99)]
+    events = []
+    for session_id, (date, name, seconds) in enumerate(fixtures, 1):
+        activity = {"id": name, "name": name}
+        ns = int(date.timestamp()) * 1_000_000_000
+        events.extend([
+            {"version": 1, "change": {"start": {"session_id": session_id, "activity": activity, "start_utc_ns": ns}}},
+            {"version": 1, "change": {"stop": {"session_id": session_id, "activity": activity, "end_utc_ns": ns, "duration_ns": seconds * 1_000_000_000}}},
+        ])
+    history.write_text("".join(json.dumps(event) + "\n" for event in events))
+    before = history.read_bytes()
+    process, master, slave, original = launch(args=("--config", str(config), "--history", str(history)), cwd=directory)
+    try:
+        receive(master, b"\x1b[?7h")
+        os.write(master, b"d")
+        screen = receive_frame(master, b"Daily summaries")
+        assert b"Pacific/Kiritimati" in screen and b"00:00:07  Removed" in screen
+        assert b"Three weeks ago" not in screen and b"Outside window" not in screen
+        for days in range(7):
+            assert (today - timedelta(days=days)).strftime("%Y-%m-%d").encode() in screen, screen
+        assert b"No time recorded" in screen and b"(current)" in screen
+        assert not select.select([master], [], [], 1.2)[0], "idle summary redraw"
+        for key in (b"1", b"a", b"e"):
+            os.write(master, key)
+            receive_frame(master, b"Daily summaries")
+        assert history.read_bytes() == before and not list(root.glob("*.csv"))
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 4, 40, 0, 0))
+        process.send_signal(signal.SIGWINCH)
+        receive_frame(master, b"Daily summaries")
+        seen = b""
+        for _ in range(20):
+            os.write(master, b"\x1b[B")
+            seen += receive_frame(master, b"Daily summaries")
+        assert b"Six days ago" in seen
+        assert b"\x1b[4;1HUp/Down: scroll" in seen and b"\x1b[5;1H" not in seen
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 1, 20, 0, 0))
+        process.send_signal(signal.SIGWINCH)
+        tiny = receive(master, b"\x1b[?7h")
+        assert b"\x1b[2;1H" not in tiny
+        os.write(master, b"\x1b[A")
+        receive(master, b"\x1b[?7h")
+        os.write(master, b"\x1b")
+        receive_frame(master, b"d/w sums a menu q")
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+        process.send_signal(signal.SIGWINCH)
+        receive_frame(master, b"Stopped")
+        os.write(master, b"w")
+        screen = receive_frame(master, b"Weekly summaries")
+        for weeks in range(4):
+            start_date = monday - timedelta(weeks=weeks)
+            end_date = start_date + timedelta(days=6)
+            expected = sum(seconds for date, _, seconds in fixtures if start_date <= date <= end_date)
+            label = f"{start_date:%Y-%m-%d}..{end_date:%Y-%m-%d} | 00:00:{expected:02d}"
+            assert label.encode() in screen, (label, screen)
+        assert b"Three weeks ago" in screen and b"Outside window" not in screen
+        assert history.read_bytes() == before
+        os.write(master, b"\x1b")
+        receive_frame(master, b"Stopped")
+        os.write(master, b"1")
+        receive_frame(master, b"Active: Work")
+        os.write(master, b"d")
+        live_screen = receive_frame(master, b"Daily summaries")
+        assert b"in progress" in live_screen
+        receive_frame(master, b"00:00:01  Work")
+        os.write(master, b"q")  # Clean quit from a summary still saves the live session.
+        receive(master, b"\x1b[?25h\x1b[?1049l")
+        assert process.wait(timeout=5) == 0, process.stderr.read()
+        assert termios.tcgetattr(master) == original
+        assert json.loads(history.read_text().splitlines()[-1])["change"]["stop"]["duration_ns"] >= 1_000_000_000
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        os.close(master)
+        os.close(slave)
+
 # Configured-zone totals include removed activities, exclude yesterday, and survive restart.
 with tempfile.TemporaryDirectory(prefix="bad-timer-totals-") as directory:
     history = Path(directory) / "history.jsonl"
@@ -248,7 +335,7 @@ with tempfile.TemporaryDirectory(prefix="bad-timer-totals-") as directory:
                 process.send_signal(signal.SIGWINCH)
                 small = receive(master, b"\x1b[?7h")
                 assert b"More rows: enlarge terminal" in small
-                assert b"\x1b[3;1Ha menu e csv q quit" in small
+                assert b"\x1b[3;1Hd/w sums a menu q" in small
                 assert b"\x1b[4;1H" not in small
                 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 1, 5, 0, 0))
                 process.send_signal(signal.SIGWINCH)

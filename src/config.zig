@@ -3,14 +3,24 @@ const std = @import("std");
 const Activity = @import("root.zig").Activity;
 const Zone = @import("time_zone.zig").Zone;
 
+// Missing selects the system zone; a present null must still fail string parsing.
+const ZoneName = struct {
+    value: ?[]const u8 = null,
+
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !ZoneName {
+        return .{ .value = try std.json.innerParse([]const u8, allocator, source, options) };
+    }
+};
+
 const Document = struct {
     activities: []const Activity,
-    time_zone: []const u8 = "UTC",
+    time_zone: ZoneName = .{},
 };
 
 /// Owns parsed strings and activities. Do not copy; borrowed values live until deinit.
 pub const Config = struct {
     parsed: std.json.Parsed(Document),
+    zone_name: []const u8,
 
     /// Reads only; never creates or modifies the config file.
     pub fn load(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Config {
@@ -32,9 +42,10 @@ pub const Config = struct {
                 if (std.mem.eql(u8, previous.id, activity.id)) return error.DuplicateActivityId;
             }
         }
-        var zone = try Zone.init(parsed.value.time_zone);
+        const zone_name = parsed.value.time_zone.value orelse try @import("time_zone.zig").systemName(parsed.arena.allocator());
+        var zone = try Zone.init(zone_name);
         zone.deinit();
-        return .{ .parsed = parsed };
+        return .{ .parsed = parsed, .zone_name = zone_name };
     }
 
     pub fn deinit(self: *Config) void {
@@ -47,7 +58,7 @@ pub const Config = struct {
     }
 
     pub fn timeZone(self: Config) []const u8 {
-        return self.parsed.value.time_zone;
+        return self.zone_name;
     }
 
     /// Only the first nine positions have numeric keys; all remain in menu order.
@@ -67,13 +78,23 @@ test "config defaults, borrowed activities, and source ownership" {
     };
     defer config.deinit();
     std.testing.allocator.free(source);
-    try std.testing.expectEqualStrings("UTC", config.timeZone());
+    const expected_zone = try @import("time_zone.zig").systemName(std.testing.allocator);
+    defer std.testing.allocator.free(expected_zone);
+    try std.testing.expectEqualStrings(expected_zone, config.timeZone());
     try std.testing.expectEqualStrings("work", config.activities()[0].id);
     try std.testing.expectEqualStrings("Café \"break\"", config.activities()[1].name);
     try std.testing.expectEqual(@as(?u8, '1'), config.numericKey(0));
     try std.testing.expectEqual(@as(?u8, '2'), config.numericKey(1));
     try std.testing.expectEqual(null, config.numericKey(2));
     try std.testing.expectEqual(null, config.numericKey(std.math.maxInt(usize)));
+}
+
+test "explicit UTC overrides the system default" {
+    var config = try Config.parse(std.testing.allocator,
+        \\{"time_zone":"UTC","activities":[{"id":"work","name":"Work"}]}
+    );
+    defer config.deinit();
+    try std.testing.expectEqualStrings("UTC", config.timeZone());
 }
 
 test "config rejects invalid activity identities and names" {

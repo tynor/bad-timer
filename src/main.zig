@@ -190,6 +190,9 @@ fn run(init: std.process.Init) !void {
     var last_second: u64 = 0;
     var last_day: ?i64 = null;
     var menu: ?usize = null;
+    var summary: ?timer.summaries.Kind = null;
+    var summary_scroll: usize = 0;
+    var summary_max_scroll: usize = 0;
     var export_number: u64 = 1;
     var status_buffer: [256]u8 = undefined;
     var status: []const u8 = "";
@@ -209,6 +212,10 @@ fn run(init: std.process.Init) !void {
             try output("\x1b[?2026h\x1b[?7l");
             if (if (live.running == null) store.history.unfinished else null) |session| {
                 recovery_visible = try drawRecovery(session, recovery_mode, duration_entry, end_input[0..end_length], recovery_error, recovered_end, recovered_duration);
+            } else if (summary) |kind| {
+                var report = try timer.summaries.calculate(allocator, zone, store.history.sessions.items, live, now, kind);
+                defer report.deinit();
+                summary_max_scroll = try drawSummary(config, kind, report, live.running != null, &summary_scroll);
             } else if (menu) |selected| {
                 try drawMenu(config, selected, live);
             } else {
@@ -299,6 +306,16 @@ fn run(init: std.process.Init) !void {
             dirty = true;
             continue;
         }
+        if (summary != null) {
+            if (key == 27) {
+                const arrow = try escapeKey();
+                if (arrow == null) summary = null else if (arrow.? == 'A') {
+                    summary_scroll -|= 1;
+                } else if (arrow.? == 'B') summary_scroll = @min(summary_scroll +| 1, summary_max_scroll);
+            }
+            dirty = true;
+            continue;
+        }
         if (menu) |selected| {
             if (key == 27) {
                 const arrow = try escapeKey();
@@ -330,6 +347,10 @@ fn run(init: std.process.Init) !void {
             status = try std.fmt.bufPrint(&status_buffer, "Exported completed sessions to ./{s}", .{path});
         }
         if (key == 'a') menu = 0;
+        if (key == 'd' or key == 'w') {
+            summary = if (key == 'd') .daily else .weekly;
+            summary_scroll = 0;
+        }
         if (key >= '1' and key <= '9') {
             const index: usize = key - '1';
             if (index < config.activities().len)
@@ -569,6 +590,71 @@ test "display durations keep hours beyond one day and do not wrap" {
     _ = try duration(&buffer, std.math.maxInt(u128) / std.time.ns_per_s);
 }
 
+fn dateText(buffer: []u8, date: timer.time_zone.Date) ![]const u8 {
+    return std.fmt.bufPrint(buffer, "{d:0>4}-{d:0>2}-{d:0>2}", .{ @as(u16, @intCast(date.year)), @as(u8, @intCast(date.month)), @as(u8, @intCast(date.day)) });
+}
+
+fn summaryLine(screen: *Screen, index: *usize, skip: usize) !bool {
+    const current = index.*;
+    index.* += 1;
+    return current >= skip and try screen.line();
+}
+
+fn drawSummary(config: Config, kind: timer.summaries.Kind, report: timer.summaries.Report, running: bool, scroll: *usize) !usize {
+    var size: c.struct_winsize = std.mem.zeroes(c.struct_winsize);
+    if (c.ioctl(c.STDOUT_FILENO, c.TIOCGWINSZ, &size) != 0) return error.TerminalSizeFailed;
+    try output("\x1b[H\x1b[2J");
+    const rows: usize = @max(size.ws_row, 1);
+    const header = rows >= 3;
+    const footer = rows >= 2;
+    const capacity = rows - @intFromBool(header) - @intFromBool(footer);
+    var count: usize = 0;
+    for (report.periods) |period| count += 1 + @max(period.totals.len, 1);
+    const maximum = count -| capacity;
+    scroll.* = @min(scroll.*, maximum);
+    var screen = Screen{ .rows = rows - @intFromBool(footer) };
+    var buffer: [256]u8 = undefined;
+    if (header and try screen.line()) {
+        try output(if (kind == .daily) "Daily summaries | " else "Weekly summaries | ");
+        try activityName(config.timeZone());
+        try output(try std.fmt.bufPrint(&buffer, " | ^{d} v{d}", .{ scroll.*, count - @min(scroll.* + capacity, count) }));
+    }
+    var line: usize = 0;
+    for (report.periods, 0..) |period, period_index| {
+        if (try summaryLine(&screen, &line, scroll.*)) {
+            try output(try dateText(&buffer, period.first));
+            if (kind == .weekly) {
+                try output("..");
+                try output(try dateText(&buffer, period.last));
+            }
+            try output(" | ");
+            try output(try duration(&buffer, period.duration_ns / std.time.ns_per_s));
+            if (period_index == 0) try output(if (running) " (current, in progress)" else " (current)");
+        }
+        if (period.totals.len == 0 and try summaryLine(&screen, &line, scroll.*)) try output("  No time recorded");
+        for (period.totals) |total| {
+            if (try summaryLine(&screen, &line, scroll.*)) {
+                try output("  ");
+                try output(try duration(&buffer, total.duration_ns / std.time.ns_per_s));
+                try output("  ");
+                var name = total.activity.name;
+                for (config.activities()) |activity| {
+                    if (std.mem.eql(u8, activity.id, total.activity.id)) {
+                        name = activity.name;
+                        break;
+                    }
+                }
+                try activityName(name);
+            }
+        }
+    }
+    if (footer) {
+        try output(try std.fmt.bufPrint(&buffer, "\x1b[{d};1H", .{rows}));
+        try output(if (size.ws_col >= 40) "Up/Down: scroll | Esc: timer | q: quit" else "^v scroll Esc q");
+    }
+    return maximum;
+}
+
 fn draw(config: Config, live: timer.Timer, seconds: u64, status: []const u8, totals: []const timer.totals.Total, weekly: []const timer.totals.Total) !void {
     var size: c.struct_winsize = std.mem.zeroes(c.struct_winsize);
     if (c.ioctl(c.STDOUT_FILENO, c.TIOCGWINSZ, &size) != 0) return error.TerminalSizeFailed;
@@ -613,5 +699,5 @@ fn draw(config: Config, live: timer.Timer, seconds: u64, status: []const u8, tot
         try activityName(status);
     }
     try output(try std.fmt.bufPrint(&buffer, "\x1b[{d};1H", .{rows}));
-    try output(if (size.ws_col >= 50) "1-9: toggle | a: activities | e: export | q: quit" else if (size.ws_col >= 18) "a menu e csv q quit" else "a e q");
+    try output(if (size.ws_col >= 66) "1-9: toggle | a: activities | d: days | w: weeks | e: export | q: quit" else if (size.ws_col >= 50) "1-9 toggle | a menu | d days w weeks | e csv q quit" else if (size.ws_col >= 25) "d days w weeks a menu e q" else if (size.ws_col >= 18) "d/w sums a menu q" else "a e q");
 }

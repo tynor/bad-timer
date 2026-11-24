@@ -101,6 +101,26 @@ Below 50 columns the week column is hidden with an enlargement hint in the heade
 Daily rollover already triggers weekly refresh, including Monday; idle redraw and
 history/CSV behavior are unchanged. Tests cover DST weeks, year/Monday boundaries,
 zone differences, rounding, stable IDs, live crossings, and responsive PTY display.
+Fixed summary screens are also approved (PLAN.md section 7): `d` shows today plus
+six previous days; `w` shows this Monday–Sunday week plus three previous weeks.
+`src/summaries.zig` builds newest-first calendar periods with exact grand totals,
+activity breakdowns, and empty periods. Screens scroll with Up/Down, return with
+Esc, keep live timers running, and preserve global quit/save behavior. Current
+periods are labeled and show in-progress state. Browsing ignores activity/export
+keys and does not write history. Shared synchronized rendering/resize bounds apply.
+Unit/PTY tests cover windows, DST/years, live splits, identities, read-only browsing,
+small-screen scrolling, no idle redraw, and live quit saving. The measured
+ReleaseSmall binary with summaries and system-zone defaults is now 279,560 bytes;
+the earlier 2,691,368-byte result did not recur and its cause was not investigated.
+CPU/RSS and large-history scaling are unverified.
+Omitted config timezones now resolve the macOS system timezone once at startup,
+falling back to UTC if unavailable/unsupported (approved PLAN.md section 8).
+Explicit zones still win; explicit null/empty/unknown zones remain errors. Config
+owns the resolved name in its parsed arena and all screens use it unchanged until
+restart. `time_zone.systemName` owns its returned UTF-8 name; low-level
+`Zone.init(null)` still explicitly selects UTC for deterministic callers. Tests
+cover real system acquisition, deterministic resolution/fallback, explicit
+overrides, and source/name ownership. History/CSV formats are unchanged.
 An isolated `history_recovery.recover` API now locks an existing source, validates
 all LF-terminated records, and publishes their exact prefix to a new no-overwrite
 file, reporting omitted tail bytes and retained completed/unfinished sessions.
@@ -135,7 +155,8 @@ The approved requirements are not existing behavior.
 - `tests/resource_check.py`: macOS PTY size/history checks; no CPU/RSS inspection.
 - `README.md`: foundation usage, verification, and known limits.
 - `src/root.zig`: in-memory timer state, borrowed activity identity, and deterministic tests.
-- `src/totals.zig`: isolated configured-zone daily/weekly attribution, stable-ID grouping, and tests.
+- `src/totals.zig`: isolated configured-zone day/week/interval attribution, stable-ID grouping, and tests.
+- `src/summaries.zig`: fixed 7-day/4-week reports, exact per-period totals, owned slices, and tests.
 - `src/time_zone.zig`, `src/time_zone.h`: macOS CoreFoundation zone/calendar helpers and tests.
 - `src/clock.zig`, `src/clock.h`: macOS monotonic/UTC clock acquisition and tests.
 - `src/config.zig`: owned JSON config parsing/loading, validation, numeric keys, and tests.
