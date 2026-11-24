@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 import errno
 import json
 import resource
+import re
 import fcntl
 import os
 import pty
@@ -26,13 +27,60 @@ VALID_CONFIG = b'{"activities":[{"id":"work","name":"Work"}]}'
 CONFIG.write_bytes(VALID_CONFIG)
 
 
+class FrameProtocol:
+    def __init__(self):
+        self.pending = b""
+        self.active = False
+        self.recent = []
+
+    def feed(self, chunk):
+        self.pending += chunk
+        end = 0
+        for match in re.finditer(rb"\x1b\[[0-?]*[ -/]*[@-~]", self.pending):
+            code = match.group()
+            if code == b"\x1b[?2026h":
+                assert not self.active, "nested synchronized frame"
+                self.active = True
+            elif code == b"\x1b[?2026l":
+                self.active = False  # Cleanup may defensively reset an inactive mode.
+            elif code == b"\x1b[2J":
+                assert self.active, "screen clear outside synchronized frame"
+            elif code in (b"\x1b[?7h", b"\x1b[?1049l"):
+                assert not self.active, "frame not ended before wrap restoration/exit"
+                if code == b"\x1b[?1049l":
+                    assert self.recent == [b"\x1b[?2026l", b"\x1b[?7h", b"\x1b[?25h"], "missing defensive exit reset"
+            self.recent = (self.recent + [code])[-3:]
+            end = match.end()
+        self.pending = self.pending[end:]
+
+
+# Check split markers and prove the protocol assertions catch missing frame ends.
+protocol = FrameProtocol()
+for chunk in (b"\x1b[?202", b"6h\x1b[2Jframe\x1b[?2026", b"l\x1b[?7h"):
+    protocol.feed(chunk)
+assert not protocol.active
+protocol.feed(b"\x1b[?2026l\x1b[?7h\x1b[?25h\x1b[?1049l")
+for invalid in (b"\x1b[2J", b"\x1b[?2026h\x1b[?7h", b"\x1b[?2026h\x1b[?2026h", b"\x1b[?1049l"):
+    try:
+        FrameProtocol().feed(invalid)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("protocol check accepted an invalid frame")
+
+
+PROTOCOLS = {}
+
+
 def receive(fd, needle):
     data = b""
     deadline = time.monotonic() + 5
     while needle not in data and time.monotonic() < deadline:
         if select.select([fd], [], [], 0.1)[0]:
             try:
-                data += os.read(fd, 8192)
+                chunk = os.read(fd, 8192)
+                PROTOCOLS.setdefault(fd, FrameProtocol()).feed(chunk)
+                data += chunk
             except OSError as error:
                 if error.errno != errno.EIO:
                     raise
@@ -50,6 +98,7 @@ def receive_frame(fd, needle):
 
 def launch(output=None, args=(), env=ENV, file_size_limit=None, cwd=None):
     master, slave = pty.openpty()
+    PROTOCOLS[master] = FrameProtocol()
     original = termios.tcgetattr(slave)
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
 

@@ -86,6 +86,13 @@ have reserved bottom rows; small screens simplify headers/help and safely clip
 with an enlargement hint. The activity menu still reaches every configured activity.
 PTY tests cover live updates, restart/renames, removed activities, zone attribution,
 footer/status placement, and resize down to a one-row screen.
+All three TUI screens now use a shared synchronized-output (`CSI ? 2026 h/l`)
+frame boundary. Wrapping/synchronization are restored after each frame, attempted
+on redraw errors, and defensively reset during alternate-screen cleanup. Delivery
+cannot be guaranteed after terminal disconnection or unhandled termination. An
+incremental PTY protocol checker verifies split sequences, frame nesting/clears,
+and reset ordering through normal, signal, recovery, and save-failure paths.
+Real Ghostty flicker improvement remains unverified.
 An isolated `history_recovery.recover` API now locks an existing source, validates
 all LF-terminated records, and publishes their exact prefix to a new no-overwrite
 file, reporting omitted tail bytes and retained completed/unfinished sessions.

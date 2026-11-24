@@ -174,7 +174,7 @@ fn run(init: std.process.Init) !void {
         }
         if (result != 0) std.debug.print("bad_timer: terminal restore failed; run stty sane\n", .{});
     }
-    defer output("\x1b[?25h\x1b[?1049l") catch {};
+    defer output("\x1b[?2026l\x1b[?7h\x1b[?25h\x1b[?1049l") catch {};
     try output("\x1b[?1049h\x1b[?25l");
 
     var recovery_mode: RecoveryMode = .choice;
@@ -204,6 +204,9 @@ fn run(init: std.process.Init) !void {
         last_second = second;
         last_day = day.start_utc_seconds;
         if (dirty) {
+            // One boundary owns synchronized output and wrapping for every screen.
+            errdefer output("\x1b[?2026l\x1b[?7h") catch {};
+            try output("\x1b[?2026h\x1b[?7l");
             if (if (live.running == null) store.history.unfinished else null) |session| {
                 recovery_visible = try drawRecovery(session, recovery_mode, duration_entry, end_input[0..end_length], recovery_error, recovered_end, recovered_duration);
             } else if (menu) |selected| {
@@ -213,6 +216,7 @@ fn run(init: std.process.Init) !void {
                 defer allocator.free(totals);
                 try draw(config, live, second, status, totals);
             }
+            try output("\x1b[?2026l\x1b[?7h");
             dirty = false;
         }
         var readable: c.fd_set = std.mem.zeroes(c.fd_set);
@@ -412,8 +416,7 @@ fn utcText(ns: i128, buffer: []u8) ![]const u8 {
 fn drawRecovery(session: timer.history.Start, mode: RecoveryMode, duration_entry: bool, input: []const u8, invalid: bool, end: i128, elapsed: u64) !bool {
     var size: c.struct_winsize = std.mem.zeroes(c.struct_winsize);
     if (c.ioctl(c.STDOUT_FILENO, c.TIOCGWINSZ, &size) != 0) return error.TerminalSizeFailed;
-    try output("\x1b[H\x1b[2J\x1b[?7l");
-    defer output("\x1b[?7h") catch {};
+    try output("\x1b[H\x1b[2J");
     const rows: usize = @max(size.ws_row, 1);
     var screen = Screen{ .rows = rows - 1 };
     var buffer: [256]u8 = undefined;
@@ -473,9 +476,7 @@ test "recovery UTC display preserves fractions and handles unsupported dates" {
 fn drawMenu(config: Config, selected: usize, live: timer.Timer) !void {
     var size: c.struct_winsize = std.mem.zeroes(c.struct_winsize);
     if (c.ioctl(c.STDOUT_FILENO, c.TIOCGWINSZ, &size) != 0) return error.TerminalSizeFailed;
-    // Disable wrapping so long or wide Unicode names cannot push the selection off screen.
-    try output("\x1b[H\x1b[2J\x1b[?7l");
-    defer output("\x1b[?7h") catch {};
+    try output("\x1b[H\x1b[2J");
     const rows: usize = @max(size.ws_row, 1);
     const header = rows >= 3;
     const footer = rows >= 2;
@@ -558,8 +559,7 @@ test "display durations keep hours beyond one day and do not wrap" {
 fn draw(config: Config, live: timer.Timer, seconds: u64, status: []const u8, totals: []const timer.totals.Total) !void {
     var size: c.struct_winsize = std.mem.zeroes(c.struct_winsize);
     if (c.ioctl(c.STDOUT_FILENO, c.TIOCGWINSZ, &size) != 0) return error.TerminalSizeFailed;
-    try output("\x1b[H\x1b[2J\x1b[?7l");
-    defer output("\x1b[?7h") catch {};
+    try output("\x1b[H\x1b[2J");
     const rows: usize = @max(size.ws_row, 1);
     const status_rows: usize = @intFromBool(status.len != 0 and rows > 1);
     var screen = Screen{ .rows = rows - 1 - status_rows };

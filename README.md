@@ -74,7 +74,14 @@ are clipped at the terminal edge rather than wrapping; resize adjusts the visibl
 
 Uses macOS libc and CoreFoundation APIs via Zig's build-time C translation, with no third-party
 dependencies. Input waits in `select` with a one-second timeout, not busy polling;
-idle timeouts do not redraw or write files. SIGINT, SIGTERM, SIGHUP, and SIGQUIT
+idle timeouts do not redraw or write files. Main, activity-menu, and recovery
+redraws use Ghostty's synchronized-output mode (`CSI ? 2026 h/l`) to present each
+redraw together instead of exposing intermediate clears/writes. The shared redraw
+path ends synchronization and restores wrapping after each frame, attempts both
+on redraw errors, and defensively resets both before leaving the alternate screen.
+Output cleanup is best effort if the terminal has disconnected; SIGKILL/crashes
+cannot guarantee it. PTY checks validate the protocol, but actual flicker improvement
+still needs manual Ghostty review. SIGINT, SIGTERM, SIGHUP, and SIGQUIT
 unwind the screen and restore termios. Ctrl-Z suspension is disabled while the
 screen is active. SIGKILL, crashes, or terminal disconnection cannot guarantee
 screen cleanup; use `stty sane` and `reset` if necessary.
@@ -101,7 +108,7 @@ Measured on Apple M1 Max (arm64), macOS 27.2.1, Zig 0.17.1, ReleaseSmall:
 
 | Measurement | Result |
 | --- | ---: |
-| Executable size (including recovery CLI and cleaned-up TUI) | 277,832 bytes |
+| Executable size (including recovery CLI and cleaned-up TUI) | 277,992 bytes |
 | Empty history | 0 bytes |
 | After start | 124 bytes |
 | After switch | 391 bytes |
@@ -122,7 +129,11 @@ The Python smoke test uses macOS pseudo-terminals to check input, resize, no
 idle redraw, quit/Ctrl-C/signals, runtime output-disconnection errors, termios
 restoration, menu selection beyond nine, selection/running labels, shortcut display,
 scroll counts, one-/two-row resize, long/control-containing names, cancellation,
-durable menu start/stop/switch, and rejection of non-TTY/unsupported-terminal startup. It requires
+durable menu start/stop/switch, and rejection of non-TTY/unsupported-terminal startup.
+An incremental output-protocol checker handles split escape sequences, rejects
+nested synchronized frames and unprotected clears, and checks synchronization
+ends before wrapping is restored or the alternate screen is left (including
+handled interruption and save-failure paths). It requires
 Python 3 and is separate from `zig build test`.
 
 `zig build test` covers the timer's start/stop, same-ID toggle, gap-free switching,
