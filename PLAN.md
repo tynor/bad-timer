@@ -272,3 +272,21 @@ Sunday versus display Monday, DST days/weeks, midnight boundaries, skipped dates
 and rounding conservation; PTY checks of both stats columns and summary screens
 across restart with preserved history bytes. Keep existing scroll/resize, durable
 controls and no-idle-redraw behavior. Stop for review after this step.
+
+## 11. Approved extension: minimal SwiftUI frontend
+
+User approved a first native-app slice alongside, not replacing, the TUI:
+SwiftUI activity selection, elapsed display, durable start/stop/switch, and normal
+quit saving. Reuse Zig core through a thin C bridge; share the transition path
+rather than maintaining independent persistence logic. Existing config/history
+paths and exclusive locks remain authoritative. Unfinished sessions block native
+startup and require explicit TUI recovery. Save failures block retries and explain
+uncertainty. Native recovery, summaries/totals, CSV UI, and signing/distribution
+are outside this slice.
+
+Implemented in `macos/`, `src/native.zig`, and `src/transition.zig`. Acceptance:
+both frontends build; bridge checks exercise activity selection, atomic switch,
+stop, restart replay, lock contention, invalid selection, and unchanged unfinished
+history on refusal. Existing Zig unit and terminal PTY checks pass. Interactive
+GUI behavior and native quit/save-failure dialogs remain manual checks, not claimed
+verified. Stop for review before further native functionality.

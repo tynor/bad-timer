@@ -162,6 +162,15 @@ short-session history growth, and unchanged history content/mtime during stopped
 and running no-input windows. CPU/RSS checks were skipped at user request after
 sandbox denial of `ps`; their provisional targets remain unverified. Measurements
 and method are in README.md. Real Ghostty and macOS suspend-clock validation are pending.
+Approved PLAN.md section 11 now adds a minimal SwiftUI frontend alongside the TUI.
+`macos/build.sh` builds an unsigned local app using `src/native.zig`'s main-thread
+C bridge and the shared `src/transition.zig` durable transition path. It supports
+activity start/stop/switch, elapsed display, and normal quit saving; unfinished
+history blocks startup for explicit TUI recovery. Same config/history and locking;
+no independent Swift persistence. `tests/native_smoke.py` checks bridge transitions,
+replay, locking, and unchanged unfinished history. Builds/unit/PTY checks pass;
+interactive GUI/quit dialogs and older macOS remain unverified. Native recovery,
+totals/summaries, exports, and distribution are deferred. Stop for review.
 Read `PLAN.md` for the approved MVP and defaults. Plan approval is not blanket
 implementation approval: propose each small implementation step and its acceptance
 checks, obtain explicit approval, implement only that step, then stop for review.
@@ -179,6 +188,9 @@ The approved requirements are not existing behavior.
 - `tests/resource_check.py`: macOS PTY size/history checks; no CPU/RSS inspection.
 - `README.md`: foundation usage, verification, and known limits.
 - `src/root.zig`: in-memory timer state, borrowed activity identity, and deterministic tests.
+- `src/transition.zig`: durable transitions shared by both frontends.
+- `src/native.zig`, `macos/`: thin C bridge and minimal SwiftUI app/build script.
+- `tests/native_smoke.py`, `tests/native_bridge.c`: native bridge integration checks.
 - `src/totals.zig`: isolated configured-zone day/week/interval attribution, stable-ID grouping, and tests.
 - `src/summaries.zig`: fixed 7-day/4-week reports, exact per-period totals, owned slices, and tests.
 - `src/time_zone.zig`, `src/time_zone.h`: macOS CoreFoundation zone/calendar helpers and tests.

@@ -9,6 +9,7 @@ pub const storage = @import("storage.zig");
 pub const csv = @import("export.zig");
 pub const totals = @import("totals.zig");
 pub const summaries = @import("summaries.zig");
+pub const transition = @import("transition.zig").transition;
 
 test {
     _ = time_zone;

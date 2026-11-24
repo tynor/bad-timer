@@ -112,6 +112,22 @@ pub fn build(b: *std.Build) void {
     // by passing `--prefix` or `-p`.
     b.installArtifact(exe);
 
+    const native = b.addLibrary(.{
+        .name = "bad_timer_core",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/native.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{.{ .name = "bad_timer", .module = mod }},
+        }),
+    });
+    native.bundle_compiler_rt = true;
+    const native_step = b.step("native", "Build the Swift-compatible core library");
+    const install_native = b.addInstallArtifact(native, .{});
+    native_step.dependOn(&install_native.step);
+
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
     // This will evaluate the `run` step rather than the default step.

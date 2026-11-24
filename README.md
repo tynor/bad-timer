@@ -1,5 +1,40 @@
 # bad-timer
 
+## Native macOS app (first slice)
+
+With Zig 0.17.1 and Swift/Xcode command-line tools installed:
+
+```sh
+sh macos/build.sh
+open "build/Bad Timer.app"
+# Bridge integration tests (temporary config/history only):
+python3 tests/native_smoke.py
+```
+
+The small SwiftUI window lists configured activities and live elapsed time.
+Click to start, click the running activity to stop, or another to switch atomically.
+Normal Quit/window-close saves the running session. The app links the existing Zig
+clock, config, history, and shared durable-transition implementation; it does not
+reimplement timing or write JSON history in Swift.
+
+It uses the same `$HOME/Library/Application Support/bad-timer/config.json` and
+`history.jsonl` as the TUI; create the config and parent directory as described
+below. Exclusive locking prevents concurrent app/TUI writers. For isolated testing,
+launch `build/Bad Timer.app/Contents/MacOS/BadTimer` directly with
+`BAD_TIMER_CONFIG` and `BAD_TIMER_HISTORY` environment overrides.
+Unfinished history blocks startup without modification: recover using the TUI,
+then restart the app. Corrupt history is never automatically repaired. After an
+uncertain save failure, controls block retries; quit and inspect/recover history.
+Force Quit/crashes leave explicit recovery for restart.
+
+This is a local, unsigned app, not an App Store/sandboxed distribution. Native
+recovery, totals/summary screens, config editing, and CSV controls are deferred;
+they remain available in the TUI. App compilation, bridge replay/locking/transitions,
+and existing unit/PTY checks were verified; interactive GUI behavior and older
+macOS deployment were not verified. The current SDK may emit deployment-version
+linker warnings when its version differs from the host Zig target.
+
+
 A keyboard-driven workday timer with durable numeric-key activity tracking.
 Keys `1`–`9` select activities in config order: start while stopped, stop the
 same activity, or switch atomically to another. The screen shows keys, active
