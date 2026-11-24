@@ -15,6 +15,7 @@ pub const Day = struct {
 
 /// Owned UTF-8 system identifier, or UTC if unavailable/unsupported. Caller frees.
 pub fn systemName(allocator: std.mem.Allocator) ![]const u8 {
+    c.CFTimeZoneResetSystem(); // Refresh CF's cache so later starts see OS changes.
     const zone = c.CFTimeZoneCopySystem();
     defer if (zone != null) c.CFRelease(zone);
     return systemNameFrom(allocator, zone);

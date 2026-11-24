@@ -141,6 +141,10 @@ fn run(init: std.process.Init) !void {
         return error.HistoryLoadFailed;
     };
     defer store.deinit(init.io);
+    store.assignLegacyTimezone(init.io, config.timeZone()) catch |err| {
+        std.debug.print("bad_timer: timezone assignment failed at {s}: {s}; disk may contain part or all of the event; preserve history and restart to inspect it; do not retry in this process\n", .{ locations.history, @errorName(err) });
+        return error.TimezoneAssignmentFailed;
+    };
 
     var original: c.struct_termios = undefined;
     if (c.tcgetattr(c.STDIN_FILENO, &original) != 0) return error.TerminalSetupFailed;
@@ -281,7 +285,7 @@ fn run(init: std.process.Init) !void {
                 }
             } else if (recovery_mode == .confirm) {
                 if (key == 'y' and recovery_visible) {
-                    store.append(init.io, .{ .version = 1, .change = .{ .stop = .{
+                    store.append(init.io, .{ .version = 2, .change = .{ .stop = .{
                         .session_id = session.session_id,
                         .activity = session.activity,
                         .end_utc_ns = recovered_end,
@@ -298,7 +302,7 @@ fn run(init: std.process.Init) !void {
                 input_overflow = false;
                 recovery_error = false;
             } else if (key == 'd') {
-                store.append(init.io, .{ .version = 1, .change = .{ .discard = .{ .session_id = session.session_id } } }) catch |err| {
+                store.append(init.io, .{ .version = 2, .change = .{ .discard = .{ .session_id = session.session_id } } }) catch |err| {
                     std.debug.print("bad_timer: discard failed at {s}: {s}; disk may contain part or all of the event; preserve the history file and restart to inspect it; do not retry in this process\n", .{ locations.history, @errorName(err) });
                     return error.HistoryDiscardFailed;
                 };
@@ -327,7 +331,7 @@ fn run(init: std.process.Init) !void {
                     menu = @min(selected + 1, config.activities().len - 1);
                 }
             } else if (key == '\r' or key == '\n') {
-                try transition(&live, &store, init.io, config.activities()[selected], locations.history);
+                try transition(&live, &store, init.io, config, config.activities()[selected], locations.history);
                 menu = null;
             }
             dirty = true;
@@ -354,11 +358,11 @@ fn run(init: std.process.Init) !void {
         if (key >= '1' and key <= '9') {
             const index: usize = key - '1';
             if (index < config.activities().len)
-                try transition(&live, &store, init.io, config.activities()[index], locations.history);
+                try transition(&live, &store, init.io, config, config.activities()[index], locations.history);
         }
         dirty = true;
     }
-    if (live.running != null) try transition(&live, &store, init.io, null, locations.history);
+    if (live.running != null) try transition(&live, &store, init.io, config, null, locations.history);
 }
 
 fn exportReport(allocator: std.mem.Allocator, io: std.Io, sessions: []const timer.Session, number: *u64, buffer: []u8) ![]const u8 {
@@ -375,7 +379,11 @@ fn exportReport(allocator: std.mem.Allocator, io: std.Io, sessions: []const time
     }
 }
 
-fn transition(live: *timer.Timer, store: *timer.storage.Store, io: std.Io, activity: ?timer.Activity, path: []const u8) !void {
+fn transition(live: *timer.Timer, store: *timer.storage.Store, io: std.Io, config: Config, activity: ?timer.Activity, path: []const u8) !void {
+    const allocator = store.history.arena.child_allocator;
+    const starts = if (activity) |selected| (if (live.running) |running| !std.mem.eql(u8, selected.id, running.activity.id) else true) else false;
+    const name = if (starts) try config.sessionTimeZone(allocator) else null;
+    defer if (name) |value| allocator.free(value);
     const now = try timer.clock.now();
     var next = live.*;
     const completed = if (activity) |selected| try next.select(selected, now) else try next.stop(now);
@@ -389,14 +397,16 @@ fn transition(live: *timer.Timer, store: *timer.storage.Store, io: std.Io, activ
         .session_id = try std.math.add(u64, store.history.last_session_id, 1),
         .activity = running.activity,
         .start_utc_ns = running.start.utc_ns,
+        .time_zone = name,
     } else null;
-    const event: timer.history.Event = .{ .version = 1, .change = if (start) |s|
+    const event: timer.history.Event = .{ .version = 2, .change = if (start) |s|
         (if (stop) |t| .{ .switch_activity = .{ .start = s, .stop = t } } else .{ .start = s })
     else if (stop) |t| .{ .stop = t } else return };
     store.append(io, event) catch |err| {
         std.debug.print("bad_timer: timer save failed at {s}: {s}; disk may contain part or all of the event; preserve the history file and restart to inspect it; do not retry in this process\n", .{ path, @errorName(err) });
         return error.TimerSaveFailed;
     };
+    if (next.running) |*running| running.time_zone = store.history.unfinished.?.time_zone;
     live.* = next;
 }
 

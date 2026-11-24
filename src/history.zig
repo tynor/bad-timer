@@ -6,6 +6,7 @@ pub const Start = struct {
     session_id: u64,
     activity: timer.Activity,
     start_utc_ns: i128,
+    time_zone: ?[]const u8 = null,
 };
 
 pub const Stop = struct {
@@ -22,6 +23,7 @@ pub const Event = struct {
         stop: Stop,
         switch_activity: struct { stop: Stop, start: Start },
         discard: struct { session_id: u64 },
+        legacy_timezone: []const u8,
     },
 };
 
@@ -30,12 +32,24 @@ fn validateActivity(activity: timer.Activity) !void {
         std.mem.trim(u8, activity.name, " \t\r\n").len == 0) return error.InvalidActivity;
 }
 
+fn validateZone(name: []const u8) !void {
+    var zone = try timer.time_zone.Zone.init(name);
+    zone.deinit();
+}
+
 fn validate(event: Event) !void {
-    if (event.version != 1) return error.UnsupportedHistoryVersion;
+    if (event.version != 1 and event.version != 2) return error.UnsupportedHistoryVersion;
     switch (event.change) {
         .start => |start| {
             if (start.session_id == 0) return error.InvalidSessionId;
             try validateActivity(start.activity);
+            if (event.version == 2) {
+                try validateZone(start.time_zone orelse return error.MissingSessionTimezone);
+            } else if (start.time_zone != null) return error.UnexpectedSessionTimezone;
+        },
+        .legacy_timezone => |name| {
+            if (event.version != 2) return error.UnsupportedHistoryVersion;
+            try validateZone(name);
         },
         .discard => |discard| {
             if (discard.session_id == 0) return error.InvalidSessionId;
@@ -45,8 +59,8 @@ fn validate(event: Event) !void {
             try validateActivity(stop.activity);
         },
         .switch_activity => |change| {
-            try validate(.{ .version = 1, .change = .{ .stop = change.stop } });
-            try validate(.{ .version = 1, .change = .{ .start = change.start } });
+            try validate(.{ .version = event.version, .change = .{ .stop = change.stop } });
+            try validate(.{ .version = event.version, .change = .{ .start = change.start } });
             if (change.stop.end_utc_ns != change.start.start_utc_ns) return error.InvalidSwitchBoundary;
             if (std.mem.eql(u8, change.stop.activity.id, change.start.activity.id)) return error.InvalidSwitchActivity;
         },
@@ -67,6 +81,14 @@ pub const History = struct {
     sessions: std.ArrayList(timer.Session) = .empty,
     unfinished: ?Start = null,
     last_session_id: u64 = 0,
+    legacy_timezone: ?[]const u8 = null,
+    upgraded: bool = false,
+
+    pub fn needsLegacyTimezone(self: History) bool {
+        if (self.unfinished) |start| if (start.time_zone == null) return true;
+        for (self.sessions.items) |session| if (session.time_zone == null) return true;
+        return false;
+    }
 
     pub fn deinit(self: *History) void {
         self.arena.deinit();
@@ -108,6 +130,7 @@ pub const History = struct {
             .start_utc_ns = start.start_utc_ns,
             .end_utc_ns = stop.end_utc_ns,
             .duration_ns = stop.duration_ns,
+            .time_zone = start.time_zone,
         });
         self.unfinished = null;
     }
@@ -121,6 +144,8 @@ pub const History = struct {
             .arena = std.heap.ArenaAllocator.init(self.arena.child_allocator),
             .unfinished = self.unfinished,
             .last_session_id = self.last_session_id,
+            .legacy_timezone = self.legacy_timezone,
+            .upgraded = self.upgraded,
         };
         defer trial.deinit();
         try trial.apply(event);
@@ -130,12 +155,15 @@ pub const History = struct {
         const start: ?*Start = switch (owned.change) {
             .start => |*start| start,
             .switch_activity => |*change| &change.start,
-            .stop, .discard => null,
+            .stop, .discard, .legacy_timezone => null,
         };
         if (start) |s| {
             s.activity.id = try self.arena.allocator().dupe(u8, s.activity.id);
             s.activity.name = try self.arena.allocator().dupe(u8, s.activity.name);
+            if (s.time_zone) |name| s.time_zone = try self.arena.allocator().dupe(u8, name);
         }
+        if (owned.change == .legacy_timezone)
+            owned.change.legacy_timezone = try self.arena.allocator().dupe(u8, owned.change.legacy_timezone);
         return owned;
     }
 
@@ -145,7 +173,18 @@ pub const History = struct {
     }
 
     fn apply(self: *History, event: Event) !void {
+        if (self.upgraded and event.version == 1) return error.LegacyEventAfterUpgrade;
         switch (event.change) {
+            .legacy_timezone => |name| {
+                if (self.legacy_timezone != null) return error.DuplicateLegacyTimezone;
+                for (self.sessions.items) |*session| if (session.time_zone == null) {
+                    session.time_zone = name;
+                };
+                if (self.unfinished) |*start| if (start.time_zone == null) {
+                    start.time_zone = name;
+                };
+                self.legacy_timezone = name;
+            },
             .start => |start| try self.begin(start),
             .stop => |stop| try self.end(stop),
             .discard => |discard| {
@@ -158,6 +197,7 @@ pub const History = struct {
                 try self.begin(change.start);
             },
         }
+        if (event.version == 2) self.upgraded = true;
     }
 };
 
@@ -175,6 +215,53 @@ fn replayEvents(events: []const Event) !History {
         try bytes.appendSlice(std.testing.allocator, line);
     }
     return History.replay(std.testing.allocator, bytes.items);
+}
+
+test "legacy assignment and zoned switches retain immutable owned session zones" {
+    const legacy_start: Start = .{ .session_id = 2, .activity = rest, .start_utc_ns = 200 };
+    const assignment: Event = .{ .version = 2, .change = .{ .legacy_timezone = "America/Los_Angeles" } };
+    const switched: Event = .{ .version = 2, .change = .{ .switch_activity = .{
+        .stop = .{ .session_id = 2, .activity = rest, .end_utc_ns = 300, .duration_ns = 100 },
+        .start = .{ .session_id = 3, .activity = work, .start_utc_ns = 300, .time_zone = "Asia/Tokyo" },
+    } } };
+    var history = try replayEvents(&.{ start_event, stop_event, .{ .version = 1, .change = .{ .start = legacy_start } } });
+    defer history.deinit();
+    try std.testing.expect(history.needsLegacyTimezone());
+    const prepared = try history.prepare(assignment);
+    try std.testing.expect(history.sessions.items[0].time_zone == null);
+    history.commit(prepared);
+    try std.testing.expect(!history.needsLegacyTimezone());
+    try std.testing.expectEqualStrings("America/Los_Angeles", history.unfinished.?.time_zone.?);
+    try std.testing.expectEqualStrings("America/Los_Angeles", history.sessions.items[0].time_zone.?);
+    var text = "Asia/Tokyo".*;
+    var borrowed = switched;
+    borrowed.change.switch_activity.start.time_zone = &text;
+    const owned = try history.prepare(borrowed);
+    text[0] = 'X';
+    history.commit(owned);
+    try std.testing.expectEqualStrings("Asia/Tokyo", history.unfinished.?.time_zone.?);
+    try std.testing.expectEqualStrings("America/Los_Angeles", history.sessions.items[1].time_zone.?);
+    var replayed = try replayEvents(&.{ start_event, stop_event, .{ .version = 1, .change = .{ .start = legacy_start } }, assignment, switched });
+    defer replayed.deinit();
+    try std.testing.expectEqualStrings("Asia/Tokyo", replayed.unfinished.?.time_zone.?);
+    try std.testing.expectEqualStrings("America/Los_Angeles", replayed.sessions.items[1].time_zone.?);
+    try std.testing.expectError(error.DuplicateLegacyTimezone, history.prepare(assignment));
+    try std.testing.expectError(error.LegacyEventAfterUpgrade, history.prepare(stop_event));
+    history.commit(try history.prepare(.{ .version = 2, .change = .{ .stop = .{ .session_id = 3, .activity = work, .end_utc_ns = 400, .duration_ns = 100 } } }));
+    try std.testing.expectEqualStrings("Asia/Tokyo", history.sessions.items[2].time_zone.?);
+}
+
+test "version two requires valid timezone identifiers without weakening legacy validation" {
+    var event = start_event;
+    event.version = 2;
+    try std.testing.expectError(error.MissingSessionTimezone, encode(std.testing.allocator, event));
+    for ([_][]const u8{ "", "Not/A_Zone" }) |name| {
+        event.change.start.time_zone = name;
+        try std.testing.expectError(error.InvalidTimeZone, encode(std.testing.allocator, event));
+    }
+    event.version = 1;
+    event.change.start.time_zone = "UTC";
+    try std.testing.expectError(error.UnexpectedSessionTimezone, encode(std.testing.allocator, event));
 }
 
 test "round trip owns names and preserves durations despite backwards UTC" {
@@ -266,10 +353,10 @@ test "strict records reject partial, blank, malformed, unknown and duplicate fie
         return error.ExpectedRejection;
     } else |_| {}
     try std.testing.expectError(error.IncompleteTrailingRecord, History.replay(std.testing.allocator, valid[0 .. valid.len - 1]));
-    const future = "{\"version\":2,\"change\":{\"start\":{\"session_id\":1,\"activity\":{\"id\":\"work\",\"name\":\"Work\"},\"start_utc_ns\":0}}}\n";
+    const future = "{\"version\":3,\"change\":{\"start\":{\"session_id\":1,\"activity\":{\"id\":\"work\",\"name\":\"Work\"},\"start_utc_ns\":0}}}\n";
     try std.testing.expectError(error.UnsupportedHistoryVersion, History.replay(std.testing.allocator, future));
     var invalid = start_event;
-    invalid.version = 2;
+    invalid.version = 3;
     try std.testing.expectError(error.UnsupportedHistoryVersion, replayEvents(&.{invalid}));
     invalid = start_event;
     invalid.change.start.activity.id = " ";

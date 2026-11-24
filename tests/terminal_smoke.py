@@ -222,6 +222,10 @@ with tempfile.TemporaryDirectory(prefix="bad-timer-summaries-") as directory:
     process, master, slave, original = launch(args=("--config", str(config), "--history", str(history)), cwd=directory)
     try:
         receive(master, b"\x1b[?7h")
+        migrated = history.read_bytes()
+        assert migrated.startswith(before)
+        assert json.loads(migrated[len(before):]) == {"version": 2, "change": {"legacy_timezone": zone.key}}
+        before = migrated
         os.write(master, b"d")
         screen = receive_frame(master, b"Daily summaries")
         assert b"Pacific/Kiritimati" in screen and b"00:00:07  Removed" in screen
@@ -550,10 +554,91 @@ for iteration in range(2):
             process.kill()
             process.wait(timeout=5)
 
+# Start/switch zones survive restart and later configuration changes.
+with tempfile.TemporaryDirectory(prefix="bad-timer-session-zones-") as directory:
+    root = Path(directory)
+    config = root / "config.json"
+    zoned = root / "history.jsonl"
+    for index, zone_name in enumerate(("America/Los_Angeles", "Asia/Tokyo")):
+        config.write_text(json.dumps({"time_zone": zone_name, "activities": [
+            {"id": "work", "name": "Work"}, {"id": "rest", "name": "Rest"}]}))
+        prefix = zoned.read_bytes() if zoned.exists() else b""
+        process, master, slave, original = launch(args=("--config", str(config), "--history", str(zoned)))
+        try:
+            receive_frame(master, b"Stopped")
+            os.write(master, b"1")
+            receive_frame(master, b"Active: Work")
+            os.write(master, b"2")
+            receive_frame(master, b"Active: Rest")
+            os.write(master, b"q")
+            receive(master, b"\x1b[?25h\x1b[?1049l")
+            assert process.wait(timeout=5) == 0, process.stderr.read()
+            assert termios.tcgetattr(master) == original
+            saved = zoned.read_bytes()
+            assert saved.startswith(prefix)
+            events = [json.loads(line) for line in saved[len(prefix):].splitlines()]
+            assert all(event["version"] == 2 for event in events)
+            assert events[0]["change"]["start"]["time_zone"] == zone_name
+            assert events[1]["change"]["switch_activity"]["start"]["time_zone"] == zone_name
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            os.close(master)
+            os.close(slave)
+
+# Legacy unfinished sessions get a single durable assignment before terminal setup.
+with tempfile.TemporaryDirectory(prefix="bad-timer-legacy-zone-") as directory:
+    root = Path(directory)
+    config = root / "config.json"
+    legacy = root / "history.jsonl"
+    old_start = (json.dumps({"version": 1, "change": {"start": {
+        "session_id": 7, "activity": {"id": "removed", "name": "Old name"}, "start_utc_ns": 100}}}) + "\n").encode()
+    config.write_text(json.dumps({"time_zone": "Asia/Tokyo", "activities": [{"id": "work", "name": "Work"}]}))
+    for failure in (True, False):
+        legacy.write_bytes(old_start)
+        process, master, slave, original = launch(args=("--config", str(config), "--history", str(legacy)),
+                                                   file_size_limit=len(old_start) if failure else None)
+        try:
+            if failure:
+                assert process.wait(timeout=5) == 1
+                diagnostic = process.stderr.read()
+                assert b"timezone assignment failed" in diagnostic and b"disk may contain" in diagnostic
+                assert legacy.read_bytes() == old_start
+            else:
+                receive_frame(master, b"Unfinished session 7")
+                migrated = legacy.read_bytes()
+                assert migrated.startswith(old_start)
+                assert json.loads(migrated[len(old_start):]) == {"version": 2, "change": {"legacy_timezone": "Asia/Tokyo"}}
+                os.write(master, b"q")
+                receive(master, b"\x1b[?25h\x1b[?1049l")
+                assert process.wait(timeout=5) == 0, process.stderr.read()
+            assert termios.tcgetattr(master) == original
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            os.close(master)
+            os.close(slave)
+    config.write_text(json.dumps({"time_zone": "America/Los_Angeles", "activities": [{"id": "work", "name": "Work"}]}))
+    process, master, slave, original = launch(args=("--config", str(config), "--history", str(legacy)))
+    try:
+        receive_frame(master, b"Unfinished session 7")
+        assert legacy.read_bytes() == migrated, "legacy timezone was reassigned"
+        os.write(master, b"q")
+        receive(master, b"\x1b[?25h\x1b[?1049l")
+        assert process.wait(timeout=5) == 0, process.stderr.read()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        os.close(master)
+        os.close(slave)
+
 # Recovery is explicit, append-only, and independent of the current activity config.
-start = json.dumps({"version": 1, "change": {"start": {
+start = json.dumps({"version": 2, "change": {"start": {
     "session_id": 7, "activity": {"id": "removed", "name": "Old name"},
-    "start_utc_ns": 100,
+    "start_utc_ns": 100, "time_zone": "UTC",
 }}}).encode() + b"\n"
 for action in (b"q", b"\x03", signal.SIGTERM, b"d", "write_failure"):
     history.write_bytes(start)
@@ -584,7 +669,7 @@ for action in (b"q", b"\x03", signal.SIGTERM, b"d", "write_failure"):
                 saved = history.read_bytes()
                 assert saved.startswith(start)
                 assert json.loads(saved[len(start):]) == {
-                    "version": 1, "change": {"discard": {"session_id": 7}}
+                    "version": 2, "change": {"discard": {"session_id": 7}}
                 }
                 os.write(master, b"q")
             receive(master, b"\x1b[?25h\x1b[?1049l")

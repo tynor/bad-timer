@@ -61,6 +61,11 @@ pub const Config = struct {
         return self.zone_name;
     }
 
+    /// Caller frees; omitted zones are resolved anew for each session start.
+    pub fn sessionTimeZone(self: Config, allocator: std.mem.Allocator) ![]const u8 {
+        return if (self.parsed.value.time_zone.value) |name| allocator.dupe(u8, name) else @import("time_zone.zig").systemName(allocator);
+    }
+
     /// Only the first nine positions have numeric keys; all remain in menu order.
     pub fn numericKey(self: Config, index: usize) ?u8 {
         if (index >= self.activities().len or index >= 9) return null;
@@ -81,6 +86,9 @@ test "config defaults, borrowed activities, and source ownership" {
     const expected_zone = try @import("time_zone.zig").systemName(std.testing.allocator);
     defer std.testing.allocator.free(expected_zone);
     try std.testing.expectEqualStrings(expected_zone, config.timeZone());
+    const session_zone = try config.sessionTimeZone(std.testing.allocator);
+    defer std.testing.allocator.free(session_zone);
+    try std.testing.expectEqualStrings(expected_zone, session_zone);
     try std.testing.expectEqualStrings("work", config.activities()[0].id);
     try std.testing.expectEqualStrings("Café \"break\"", config.activities()[1].name);
     try std.testing.expectEqual(@as(?u8, '1'), config.numericKey(0));
@@ -95,6 +103,9 @@ test "explicit UTC overrides the system default" {
     );
     defer config.deinit();
     try std.testing.expectEqualStrings("UTC", config.timeZone());
+    const session_zone = try config.sessionTimeZone(std.testing.allocator);
+    defer std.testing.allocator.free(session_zone);
+    try std.testing.expectEqualStrings("UTC", session_zone);
 }
 
 test "config rejects invalid activity identities and names" {

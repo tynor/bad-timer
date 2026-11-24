@@ -112,11 +112,11 @@ Measured on Apple M1 Max (arm64), macOS 27.2.1, Zig 0.17.1, ReleaseSmall:
 
 | Measurement | Result |
 | --- | ---: |
-| Executable size (including summaries and system timezone default) | 279,560 bytes |
+| Executable size (including summaries and session timezone persistence) | 279,528 bytes |
 | Empty history | 0 bytes |
-| After start | 124 bytes |
-| After switch | 391 bytes |
-| After stop (two completed sessions) | 539 bytes |
+| After start | 155 bytes |
+| After switch | 453 bytes |
+| After stop (two completed sessions) | 601 bytes |
 | History content/mtime changes during no-input windows | None |
 | History changes from export and stopped quit | None |
 
@@ -351,11 +351,16 @@ this API is not connected to the `e` key.
 
 ## In-memory history codec
 
-`src/history.zig` encodes version-1 JSON Lines events and replays them entirely
+`src/history.zig` supports version-1 legacy and version-2 JSON Lines events and replays them entirely
 in memory. `encode` returns an allocated LF-terminated record. Each event has
 required `version` and `change` fields; `change` contains exactly one `start`,
-`stop`, `switch_activity`, or `discard` value. Starts carry a positive, strictly increasing
-`session_id`, an activity ID/name snapshot, and `start_utc_ns`. Stops carry the
+`stop`, `switch_activity`, `discard`, or version-2 `legacy_timezone` value.
+Starts carry a positive, strictly increasing `session_id`, an activity ID/name
+snapshot, and `start_utc_ns`; version-2 starts also require a validated IANA
+`time_zone`. The saved zone belongs to that session, not the activity ID: stops,
+switch completion, recovery, and restart retain it. New app writes use version 2;
+older binaries reject upgraded logs. Version-1 records after an upgrade are rejected.
+Stops carry the
 same session ID and activity snapshot, `end_utc_ns`, and `duration_ns`. A switch
 contains both stop and start, with matching UTC boundary and different activity
 IDs. UTC timestamps are signed integer Unix nanoseconds; durations are unsigned
@@ -380,6 +385,35 @@ unfinished sessions, backwards wall clocks, corruption, and invalid transitions.
 The codec itself performs no I/O. Storage uses it for startup replay and transition
 preparation. Startup recovery prompts are described below. Replay currently retains the entire history in
 memory; it does not stream or impose a file-size limit.
+
+### Session timezone persistence (cutoff integration pending)
+
+On start/switch, an explicit configured zone wins; otherwise the system zone is
+resolved again at that start, with UTC fallback. The session's identifier is
+persisted and synced before the live timer commits; later config/system changes
+do not change it. Identifiers, not a frozen copy of historical OS zone rules, are
+stored. UTC timestamps, elapsed durations, and session CSV columns are unchanged.
+
+At normal startup, completed/unfinished legacy sessions without a zone receive
+the current resolved config/system zone **once**, via an appended version-2
+`{"version":2,"change":{"legacy_timezone":"America/Los_Angeles"}}` record.
+The original records are never rewritten; this is an assignment, not a recovery
+of unknowable original timezone metadata. All then-unzoned sessions inherit that
+name during replay. The assignment cannot be repeated or changed, and is written
+under the history lock and synced before terminal setup/recovery prompts. Failure
+aborts startup with an uncertainty warning; preserve the file and restart, do not
+retry in the process. Thus even quitting an unfinished-session prompt can leave a
+new startup assignment record, but does not resolve or add time to that session.
+Empty/already-zoned histories receive no assignment write. The explicit tail
+recovery command preserves bytes and does not assign zones.
+
+**This PR persists metadata only:** Today/This week and the 7-day/4-week screens
+still calculate using the display zone. The planned follow-up will
+keep shared date labels but interpret each date's cutoffs in each session's saved
+zone; no timezone grouping was requested. Tests cover legacy completed/unfinished
+assignment, exact prefix preservation, owned zone names, atomic switches, restart,
+config changes, malformed/version validation, and write/sync failure blocking.
+Actual OS timezone changes during a running process were not manually tested.
 
 ## History file loading and durable appends
 
@@ -498,8 +532,9 @@ created or modified. Fix the file and restart; there is no live reload.
 
 When `time_zone` is omitted, the app uses the macOS system timezone, with `UTC`
 as a fallback if the system identifier is unavailable or unsupported. The resolved
-zone is shown on screen and stays fixed until restart, including if the system
-zone changes while running. Explicit null, empty, or unknown zones are rejected.
+display zone is shown on screen and stays fixed until restart. Independently,
+new session starts resolve the system zone again and persist it with the session;
+explicit config zones remain fixed. Explicit null, empty, or unknown zones are rejected.
 **Changed default:** omitted-zone configs now use local calendar boundaries for
 daily/weekly totals; set `"time_zone": "UTC"` to retain the previous behavior.
 Persisted timestamps and CSV remain UTC and existing history is not rewritten. At least one activity is required. IDs must be unique and

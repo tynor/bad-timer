@@ -37,6 +37,7 @@ pub const Instant = struct {
 pub const Running = struct {
     activity: Activity,
     start: Instant,
+    time_zone: ?[]const u8 = null,
 };
 
 pub const Session = struct {
@@ -44,6 +45,7 @@ pub const Session = struct {
     start_utc_ns: i128,
     end_utc_ns: i128,
     duration_ns: u64,
+    time_zone: ?[]const u8 = null,
 };
 
 pub const Timer = struct {
@@ -72,6 +74,7 @@ pub const Timer = struct {
             .start_utc_ns = running.start.utc_ns,
             .end_utc_ns = now.utc_ns,
             .duration_ns = duration,
+            .time_zone = running.time_zone,
         };
         self.running = null;
         return completed;
@@ -101,6 +104,14 @@ test "stopped timer, start, elapsed, and explicit stop" {
     }, session);
     try std.testing.expectEqual(null, timer.running);
     try std.testing.expectEqual(null, try timer.stop(instant(40, 130)));
+}
+
+test "completed timer sessions retain their start timezone" {
+    var timer: Timer = .{};
+    _ = try timer.select(work, instant(10, 100));
+    timer.running.?.time_zone = "America/Los_Angeles";
+    const session = (try timer.stop(instant(20, 110))).?;
+    try std.testing.expectEqualStrings("America/Los_Angeles", session.time_zone.?);
 }
 
 test "same stable ID stops and retains the original activity name" {

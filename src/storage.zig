@@ -28,6 +28,12 @@ pub const Store = struct {
         return .{ .file = file, .history = try History.replay(allocator, source), .end_offset = source.len };
     }
 
+    /// Append one durable assignment, preserving all original legacy bytes.
+    pub fn assignLegacyTimezone(self: *Store, io: std.Io, name: []const u8) !void {
+        if (self.history.needsLegacyTimezone())
+            try self.append(io, .{ .version = 2, .change = .{ .legacy_timezone = name } });
+    }
+
     /// Persist and sync before committing in-memory state. A failed write requires restart.
     /// The caller must report failure as uncertain: disk may contain part or all of the event.
     pub fn append(self: *Store, io: std.Io, event: codec.Event) !void {
@@ -166,6 +172,53 @@ test "partial write and sync failures preserve state and block all further appen
             defer reopened.deinit(io);
             try std.testing.expect(reopened.history.unfinished != null);
         }
+    }
+}
+
+test "legacy zone assignment is durable once and preserves the original prefix" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testPath(&tmp);
+    defer std.testing.allocator.free(path);
+    const original = try codec.encode(std.testing.allocator, test_start);
+    defer std.testing.allocator.free(original);
+    {
+        var store = try Store.open(std.testing.allocator, io, path);
+        defer store.deinit(io);
+        try store.append(io, test_start);
+        try store.assignLegacyTimezone(io, "America/Los_Angeles");
+        const size = store.end_offset;
+        try store.assignLegacyTimezone(io, "Asia/Tokyo");
+        try std.testing.expectEqual(size, store.end_offset);
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, std.testing.allocator, .unlimited);
+        defer std.testing.allocator.free(bytes);
+        try std.testing.expect(std.mem.startsWith(u8, bytes, original));
+    }
+    var reopened = try Store.open(std.testing.allocator, io, path);
+    defer reopened.deinit(io);
+    try reopened.assignLegacyTimezone(io, "Asia/Tokyo");
+    try std.testing.expectEqualStrings("America/Los_Angeles", reopened.history.unfinished.?.time_zone.?);
+}
+
+test "failed legacy assignment does not commit and blocks retry" {
+    const io = std.testing.io;
+    for ([_]bool{ true, false }) |partial| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const path = try testPath(&tmp);
+        defer std.testing.allocator.free(path);
+        var store = try Store.open(std.testing.allocator, io, path);
+        defer store.deinit(io);
+        try store.append(io, test_start);
+        const offset = store.end_offset;
+        const assignment: codec.Event = .{ .version = 2, .change = .{ .legacy_timezone = "Asia/Tokyo" } };
+        const expected = if (partial) error.InjectedWriteFailure else error.InjectedSyncFailure;
+        try std.testing.expectError(expected, store.appendWith(assignment, FailingSink{ .file = store.file, .partial = partial }));
+        try std.testing.expect(store.history.unfinished.?.time_zone == null);
+        try std.testing.expect(store.history.legacy_timezone == null);
+        try std.testing.expectEqual(offset, store.end_offset);
+        try std.testing.expectError(error.HistoryWriteBlocked, store.assignLegacyTimezone(io, "UTC"));
     }
 }
 

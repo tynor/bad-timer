@@ -110,7 +110,7 @@ periods are labeled and show in-progress state. Browsing ignores activity/export
 keys and does not write history. Shared synchronized rendering/resize bounds apply.
 Unit/PTY tests cover windows, DST/years, live splits, identities, read-only browsing,
 small-screen scrolling, no idle redraw, and live quit saving. The measured
-ReleaseSmall binary with summaries and system-zone defaults is now 279,560 bytes;
+ReleaseSmall binary with summaries and session-zone persistence is now 279,528 bytes;
 the earlier 2,691,368-byte result did not recur and its cause was not investigated.
 CPU/RSS and large-history scaling are unverified.
 Omitted config timezones now resolve the macOS system timezone once at startup,
@@ -120,7 +120,23 @@ owns the resolved name in its parsed arena and all screens use it unchanged unti
 restart. `time_zone.systemName` owns its returned UTF-8 name; low-level
 `Zone.init(null)` still explicitly selects UTC for deterministic callers. Tests
 cover real system acquisition, deterministic resolution/fallback, explicit
-overrides, and source/name ownership. History/CSV formats are unchanged.
+overrides, and source/name ownership. CSV remains unchanged.
+Approved PLAN.md section 9 now persists timezone per timed session, not per activity
+ID. Version-2 starts (including switches) require validated `time_zone`; completed
+sessions and unfinished starts own/retain it through stop/recovery/restart. Explicit
+config zones win; otherwise `Config.sessionTimeZone` resolves system/UTC on each
+start (display-zone resolution remains startup-only for now). `Timer` borrows the
+saved history-owned zone. Startup uses `Store.assignLegacyTimezone` to append/sync
+one version-2 `legacy_timezone` assignment for all existing unzoned completed and
+unfinished sessions before terminal setup. It preserves original bytes and never
+reassigns; failure aborts with uncertainty and no logical commit/retry. Old binaries
+reject v2 logs; v1 records after v2 and duplicate assignments are rejected. Tests
+cover zone ownership/validation, switches, recovery, restart/config changes,
+legacy preservation, and partial-write/sync failure blocking.
+IMPORTANT: this is persistence only, stopped for review. Stats/summary cutoffs
+still use the display zone. The agreed future semantics retain shared date labels
+and interpret cutoffs in each session's saved zone; a separate implementation step
+still needs approval. Do not group summary sections by zone.
 An isolated `history_recovery.recover` API now locks an existing source, validates
 all LF-terminated records, and publishes their exact prefix to a new no-overwrite
 file, reporting omitted tail bytes and retained completed/unfinished sessions.

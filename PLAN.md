@@ -231,3 +231,27 @@ restart. Acceptance includes deterministic resolution/fallback and explicit-over
 tests, existing calendar attribution tests, and PTY checks. Omitted-zone configs
 may now attribute time to different days/weeks; explicit `"time_zone": "UTC"`
 preserves the old calendar behavior. History and UTC CSV formats are unchanged.
+
+## 9. Approved step: session timezone persistence
+
+Timezone identity belongs to each timed session (not permanently to an activity
+ID). Capture and durably persist a validated timezone on each start/switch,
+retaining it through stop/recovery/restart. Explicit config zones take precedence;
+otherwise resolve the system zone at each start, with UTC fallback. This updates
+the startup-only resolution policy for new session metadata; the display zone
+remains startup-resolved for now.
+
+Assign existing unzoned completed/unfinished sessions the current resolved zone
+once, via an appended, synced version-2 legacy assignment record under the history
+lock before terminal setup. Do not rewrite old records or claim to reconstruct
+their original timezone. Older binaries must reject upgraded histories; invalid
+zones/versions/transitions and downgrade records are rejected. Append failures
+must not commit metadata or allow retry in the same process. CSV stays unchanged.
+Acceptance includes owned-name replay, atomic switches, recovery, restart/config
+changes, legacy prefix preservation and write/sync failure tests plus PTY coverage.
+
+This approval covers persistence first, then stop for review. A future step must
+integrate saved zones into Today/This week and the 7-day/4-week screens, retaining
+shared date labels and interpreting each date's cutoffs in each session's saved
+zone (not grouping sections by timezone). This step does not change cutoffs.
+Mixed-zone/DST/boundary attribution tests belong with that later implementation.
