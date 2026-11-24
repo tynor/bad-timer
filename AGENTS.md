@@ -93,6 +93,14 @@ cannot be guaranteed after terminal disconnection or unhandled termination. An
 incremental PTY protocol checker verifies split sequences, frame nesting/clears,
 and reset ordering through normal, signal, recovery, and save-failure paths.
 Real Ghostty flicker improvement remains unverified.
+Current-week totals are now an approved scope extension (PLAN.md section 6).
+`Zone.weekAt` resolves Monday-to-Monday calendar boundaries in the configured zone;
+`totals.calculateWeek` shares the daily attribution implementation. The main list
+shows Today and This week, including live time and removed IDs with week-only time.
+Below 50 columns the week column is hidden with an enlargement hint in the header.
+Daily rollover already triggers weekly refresh, including Monday; idle redraw and
+history/CSV behavior are unchanged. Tests cover DST weeks, year/Monday boundaries,
+zone differences, rounding, stable IDs, live crossings, and responsive PTY display.
 An isolated `history_recovery.recover` API now locks an existing source, validates
 all LF-terminated records, and publishes their exact prefix to a new no-overwrite
 file, reporting omitted tail bytes and retained completed/unfinished sessions.
@@ -127,7 +135,7 @@ The approved requirements are not existing behavior.
 - `tests/resource_check.py`: macOS PTY size/history checks; no CPU/RSS inspection.
 - `README.md`: foundation usage, verification, and known limits.
 - `src/root.zig`: in-memory timer state, borrowed activity identity, and deterministic tests.
-- `src/totals.zig`: isolated configured-zone daily attribution, stable-ID grouping, and tests.
+- `src/totals.zig`: isolated configured-zone daily/weekly attribution, stable-ID grouping, and tests.
 - `src/time_zone.zig`, `src/time_zone.h`: macOS CoreFoundation zone/calendar helpers and tests.
 - `src/clock.zig`, `src/clock.h`: macOS monotonic/UTC clock acquisition and tests.
 - `src/config.zig`: owned JSON config parsing/loading, validation, numeric keys, and tests.

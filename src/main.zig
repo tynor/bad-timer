@@ -214,7 +214,9 @@ fn run(init: std.process.Init) !void {
             } else {
                 const totals = try timer.totals.calculate(allocator, zone, store.history.sessions.items, live, now);
                 defer allocator.free(totals);
-                try draw(config, live, second, status, totals);
+                const weekly = try timer.totals.calculateWeek(allocator, zone, store.history.sessions.items, live, now);
+                defer allocator.free(weekly);
+                try draw(config, live, second, status, totals, weekly);
             }
             try output("\x1b[?2026l\x1b[?7h");
             dirty = false;
@@ -539,11 +541,22 @@ fn duration(buffer: []u8, seconds: u128) ![]const u8 {
     return std.fmt.bufPrint(buffer, "{d:0>2}:{d:0>2}:{d:0>2}", .{ seconds / 3600, seconds / 60 % 60, seconds % 60 });
 }
 
-fn activityRow(screen: *Screen, key: ?u8, activity: timer.Activity, active: bool, seconds: u128) !void {
+fn totalSeconds(totals: []const timer.totals.Total, id: []const u8) u128 {
+    for (totals) |total| {
+        if (std.mem.eql(u8, total.activity.id, id)) return total.duration_ns / std.time.ns_per_s;
+    }
+    return 0;
+}
+
+fn activityRow(screen: *Screen, key: ?u8, activity: timer.Activity, active: bool, seconds: u128, week: ?u128) !void {
     if (!try screen.line()) return;
     var buffer: [80]u8 = undefined;
     try output(&.{ if (active) '>' else ' ', ' ', key orelse '-', ' ', ' ' });
     try output(try duration(&buffer, seconds));
+    if (week) |value| {
+        try output("  ");
+        try output(try duration(&buffer, value));
+    }
     try output("  ");
     try activityName(activity.name);
 }
@@ -556,11 +569,12 @@ test "display durations keep hours beyond one day and do not wrap" {
     _ = try duration(&buffer, std.math.maxInt(u128) / std.time.ns_per_s);
 }
 
-fn draw(config: Config, live: timer.Timer, seconds: u64, status: []const u8, totals: []const timer.totals.Total) !void {
+fn draw(config: Config, live: timer.Timer, seconds: u64, status: []const u8, totals: []const timer.totals.Total, weekly: []const timer.totals.Total) !void {
     var size: c.struct_winsize = std.mem.zeroes(c.struct_winsize);
     if (c.ioctl(c.STDOUT_FILENO, c.TIOCGWINSZ, &size) != 0) return error.TerminalSizeFailed;
     try output("\x1b[H\x1b[2J");
     const rows: usize = @max(size.ws_row, 1);
+    const show_week = size.ws_col >= 50;
     const status_rows: usize = @intFromBool(status.len != 0 and rows > 1);
     var screen = Screen{ .rows = rows - 1 - status_rows };
     var buffer: [256]u8 = undefined;
@@ -578,24 +592,17 @@ fn draw(config: Config, live: timer.Timer, seconds: u64, status: []const u8, tot
     }
     if (rows >= 8) {
         _ = try screen.line();
-        if (try screen.line()) try output("Key  Today     Activity (> running)");
+        if (try screen.line()) try output(if (show_week) "Key  Today     This week  Activity (> running)" else "Key  Today     Activity (week: enlarge)");
     }
     for (config.activities(), 0..) |activity, index| {
-        var ns: u128 = 0;
-        for (totals) |total| {
-            if (std.mem.eql(u8, activity.id, total.activity.id)) {
-                ns = total.duration_ns;
-                break;
-            }
-        }
         const active = if (live.running) |running| std.mem.eql(u8, running.activity.id, activity.id) else false;
-        try activityRow(&screen, config.numericKey(index), activity, active, ns / std.time.ns_per_s);
+        try activityRow(&screen, config.numericKey(index), activity, active, totalSeconds(totals, activity.id), if (show_week) totalSeconds(weekly, activity.id) else null);
     }
-    for (totals) |total| {
+    for (weekly) |total| {
         for (config.activities()) |activity| {
             if (std.mem.eql(u8, activity.id, total.activity.id)) break;
         } else {
-            try activityRow(&screen, null, total.activity, false, total.duration_ns / std.time.ns_per_s);
+            try activityRow(&screen, null, total.activity, false, totalSeconds(totals, total.activity.id), if (show_week) total.duration_ns / std.time.ns_per_s else null);
         }
     }
     if (screen.clipped and screen.rows > 0) {

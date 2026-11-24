@@ -3,6 +3,8 @@ const std = @import("std");
 const c = @import("time_zone_c");
 const epoch_offset = 978307200;
 
+pub const Interval = struct { start_utc_seconds: i64, end_utc_seconds: i64 };
+
 pub const Date = struct { year: i32, month: i32, day: i32 };
 pub const Day = struct {
     date: Date,
@@ -33,12 +35,27 @@ pub const Zone = struct {
         defer c.CFRelease(zone);
         const calendar = c.CFCalendarCreateWithIdentifier(null, c.kCFGregorianCalendar) orelse return error.OutOfMemory;
         c.CFCalendarSetTimeZone(calendar, zone);
+        c.CFCalendarSetFirstWeekday(calendar, 2); // Monday, independent of locale.
         return .{ .calendar = calendar };
     }
 
     pub fn deinit(self: *Zone) void {
         c.CFRelease(self.calendar);
         self.* = undefined;
+    }
+
+    /// Monday through next Monday in the configured zone, including DST changes.
+    pub fn weekAt(self: Zone, utc_seconds: i64) !Interval {
+        _ = try self.dayAt(utc_seconds);
+        const at: f64 = @floatFromInt(utc_seconds - epoch_offset);
+        var start: f64 = undefined;
+        var duration: f64 = undefined;
+        if (c.CFCalendarGetTimeRangeOfUnit(self.calendar, c.kCFCalendarUnitWeekOfYear, at, &start, &duration) == 0)
+            return error.CalendarConversionFailed;
+        return .{
+            .start_utc_seconds = @as(i64, @intFromFloat(start)) + epoch_offset,
+            .end_utc_seconds = @as(i64, @intFromFloat(start + duration)) + epoch_offset,
+        };
     }
 
     /// Returns the local date and containing day's UTC interval, without changing TZ.
@@ -98,4 +115,26 @@ test "Los Angeles local midnight and daylight saving day lengths" {
     defer utc.deinit();
     try std.testing.expectEqual(@as(i32, 31), (try zone.dayAt(1704067200)).date.day);
     try std.testing.expectEqual(@as(i32, 1), (try utc.dayAt(1704067200)).date.day);
+}
+
+test "Monday weeks include Sunday, cross years, and use actual DST boundaries" {
+    var zone = try Zone.init("America/Los_Angeles");
+    defer zone.deinit();
+    for ([_]Interval{
+        .{ .start_utc_seconds = 1709539200, .end_utc_seconds = 1710140400 }, // 167 hours
+        .{ .start_utc_seconds = 1730098800, .end_utc_seconds = 1730707200 }, // 169 hours
+        .{ .start_utc_seconds = 1735545600, .end_utc_seconds = 1736150400 }, // Dec 30–Jan 6
+    }) |week| {
+        try std.testing.expectEqualDeep(week, try zone.weekAt(week.start_utc_seconds));
+        try std.testing.expectEqualDeep(week, try zone.weekAt(week.end_utc_seconds - 1));
+        try std.testing.expectEqual(week.start_utc_seconds, (try zone.weekAt(week.start_utc_seconds - 1)).end_utc_seconds);
+        try std.testing.expectEqual(week.end_utc_seconds, (try zone.weekAt(week.end_utc_seconds)).start_utc_seconds);
+    }
+    var utc = try Zone.init(null);
+    defer utc.deinit();
+    try std.testing.expectEqualDeep(Interval{ .start_utc_seconds = -259200, .end_utc_seconds = 345600 }, try utc.weekAt(-1));
+    // Monday UTC is still Sunday in Los Angeles.
+    try std.testing.expectEqual(@as(i64, 1710115200), (try utc.weekAt(1710115200)).start_utc_seconds);
+    try std.testing.expectEqual(@as(i64, 1709539200), (try zone.weekAt(1710115200)).start_utc_seconds);
+    try std.testing.expectError(error.TimestampOutOfRange, zone.weekAt(std.math.maxInt(i64)));
 }

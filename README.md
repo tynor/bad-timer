@@ -15,8 +15,9 @@ The header shows selection position (`10/12`) and hidden-row counts (`^8 v2` mea
 position moves beside the selected item; at one row help is omitted so selection
 remains visible. Names clip without wrapping, and resizing preserves selection.
 Press `e` outside the menu to export completed sessions as CSV (details below).
-Today's per-activity totals include completed and running time in the configured
-zone, shown as `HH:MM:SS` in one list alongside activity shortcuts. `>` marks the
+Today and This week totals include completed and running time in the configured
+zone, shown as `HH:MM:SS` in one list alongside activity shortcuts. Weeks start
+Monday at local midnight and end at the following Monday, including DST changes. `>` marks the
 running activity without relying on color. Configured activities use their current
 names; removed activities retain recorded names. `-` means no numeric shortcut
 (use `a` for configured activities beyond nine). Configured activities with no
@@ -27,15 +28,17 @@ bad-timer | America/Los_Angeles
 Active: Work
 Elapsed: 00:42:10
 
-Key  Today     Activity (> running)
-> 1  01:15:30  Work
-  2  00:12:00  Break
-  -  00:08:20  Old task
+Key  Today     This week  Activity (> running)
+> 1  01:15:30  08:30:00  Work
+  2  00:12:00  01:10:00  Break
+  -  00:08:20  00:08:20  Old task
 
 1-9: toggle | a: activities | e: export | q: quit
 ```
 
 The controls footer stays at the bottom, with export status immediately above it.
+Below 50 columns the week column is hidden; enlarge the terminal to see it.
+Removed activities with time this week remain listed even if today's total is zero.
 Small screens reduce the header and help text, clip rows without scrolling, and
 show an enlargement hint. At extremely small sizes, controls/status take priority
 (the `a` menu still reaches every configured activity).
@@ -108,7 +111,7 @@ Measured on Apple M1 Max (arm64), macOS 27.2.1, Zig 0.17.1, ReleaseSmall:
 
 | Measurement | Result |
 | --- | ---: |
-| Executable size (including recovery CLI and cleaned-up TUI) | 277,992 bytes |
+| Executable size (including recovery CLI, cleaned-up TUI, weekly totals) | 278,248 bytes |
 | Empty history | 0 bytes |
 | After start | 124 bytes |
 | After switch | 391 bytes |
@@ -176,10 +179,23 @@ Tests cover UTC, pre-epoch time, local midnight, independent zones, invalid inpu
 and Los Angeles's 23-hour/25-hour days in 2024. Rules come from the installed
 macOS time-zone database and may change with OS updates.
 
-## Daily totals
+## Daily and weekly totals
 
 `src/totals.zig` exposes `calculate(allocator, zone, sessions, live, now)` for the
-local day containing `now`. It combines completed sessions and live monotonic
+local day containing `now`, and `calculateWeek` with the same arguments for the
+containing Monday–Sunday calendar week. `Zone.weekAt` uses CoreFoundation with
+Monday fixed as the first weekday, independent of locale; a DST week can have
+167 or 169 hours. Both use the same proportional attribution and cumulative
+nanosecond rounding, including start-date attribution for zero/backward spans.
+Weekly attribution is calculated directly over the whole week, not by rounding
+each displayed day's seconds. The screen refreshes at local-day changes (including
+Monday rollover), on timer ticks and transitions; there is no per-second idle redraw.
+There is no previous-week navigation or week-start setting. History and CSV exports
+remain unchanged; CSV still exports all completed session rows, not aggregates.
+Tests cover Monday/Sunday boundaries, year rollover, configured-zone differences,
+DST, boundary rounding, renames/removal, live Monday crossings, and clock jumps.
+
+Both calculations combine completed sessions and live monotonic
 elapsed time by stable activity ID, including activities removed from config.
 Only nonzero totals appear, in first-contribution order, with the first contributing
 session's borrowed ID/name (renames do not create a new activity). The caller frees

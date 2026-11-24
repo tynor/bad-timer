@@ -1,4 +1,4 @@
-//! Daily attribution of measured duration; never derives elapsed time from UTC.
+//! Calendar-day/week attribution of measured duration, never UTC-derived elapsed time.
 const std = @import("std");
 const timer = @import("root.zig");
 const tz = @import("time_zone.zig");
@@ -16,6 +16,16 @@ pub const Total = struct {
 pub fn calculate(allocator: std.mem.Allocator, zone: tz.Zone, sessions: []const timer.Session, live: timer.Timer, now: timer.Instant) ![]Total {
     const seconds = std.math.cast(i64, @divFloor(now.utc_ns, ns_per_second)) orelse return error.TimestampOutOfRange;
     const day = try zone.dayAt(seconds);
+    return calculateFor(allocator, sessions, live, now, day);
+}
+
+/// Same ownership/attribution as calculate, for the current Monday–Sunday week.
+pub fn calculateWeek(allocator: std.mem.Allocator, zone: tz.Zone, sessions: []const timer.Session, live: timer.Timer, now: timer.Instant) ![]Total {
+    const seconds = std.math.cast(i64, @divFloor(now.utc_ns, ns_per_second)) orelse return error.TimestampOutOfRange;
+    return calculateFor(allocator, sessions, live, now, try zone.weekAt(seconds));
+}
+
+fn calculateFor(allocator: std.mem.Allocator, sessions: []const timer.Session, live: timer.Timer, now: timer.Instant, day: anytype) ![]Total {
     var totals: std.ArrayList(Total) = .empty;
     errdefer totals.deinit(allocator);
     for (sessions) |session| try add(allocator, &totals, session, day);
@@ -30,7 +40,7 @@ pub fn calculate(allocator: std.mem.Allocator, zone: tz.Zone, sessions: []const 
     return totals.toOwnedSlice(allocator);
 }
 
-fn add(allocator: std.mem.Allocator, totals: *std.ArrayList(Total), session: timer.Session, day: tz.Day) !void {
+fn add(allocator: std.mem.Allocator, totals: *std.ArrayList(Total), session: timer.Session, day: anytype) !void {
     const duration = share(session, day);
     if (duration == 0) return;
     for (totals.items) |*total| {
@@ -42,7 +52,7 @@ fn add(allocator: std.mem.Allocator, totals: *std.ArrayList(Total), session: tim
     try totals.append(allocator, .{ .activity = session.activity, .duration_ns = duration });
 }
 
-fn share(session: timer.Session, day: tz.Day) u64 {
+fn share(session: timer.Session, day: anytype) u64 {
     const start: i256 = session.start_utc_ns;
     const end: i256 = session.end_utc_ns;
     const day_start: i256 = @as(i128, day.start_utc_seconds) * ns_per_second;
@@ -133,6 +143,51 @@ test "live session crosses midnight and pre-epoch fractional timestamps floor to
     const previous = try calculate(std.testing.allocator, zone, &.{tiny}, .{}, .{ .monotonic_ns = 0, .utc_ns = -1 });
     defer std.testing.allocator.free(previous);
     try std.testing.expectEqual(@as(u128, 2), previous[0].duration_ns);
+}
+
+test "weekly attribution groups renames, removed IDs, live time and boundary rounding" {
+    var zone = try tz.Zone.init(null);
+    defer zone.deinit();
+    const week = try zone.weekAt(0);
+    const start = week.start_utc_seconds;
+    const renamed: timer.Activity = .{ .id = "work", .name = "New work" };
+    const removed: timer.Activity = .{ .id = "removed", .name = "Removed" };
+    const crossing = fixture(work, start - 1, start + 2, 10);
+    const sessions = [_]timer.Session{
+        crossing,
+        fixture(renamed, 1, 2, 20),
+        fixture(removed, 3, 4, 7),
+        fixture(work, 100, -100, 42),
+        fixture(work, week.end_utc_seconds, week.end_utc_seconds, 99),
+    };
+    const live: timer.Timer = .{ .running = .{ .activity = renamed, .start = .{ .monotonic_ns = 10, .utc_ns = 7 * ns_per_second } } };
+    const now: timer.Instant = .{ .monotonic_ns = 15, .utc_ns = 8 * ns_per_second };
+    const result = try calculateWeek(std.testing.allocator, zone, &sessions, live, now);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqual(@as(usize, 2), result.len);
+    try std.testing.expectEqual(@as(u128, 74), result[0].duration_ns);
+    try std.testing.expectEqualStrings("Old work", result[0].activity.name);
+    try std.testing.expectEqual(@as(u128, 7), result[1].duration_ns);
+    try std.testing.expectEqual(@as(u64, 3), share(crossing, try zone.weekAt(start - 1)));
+    try std.testing.expectError(error.MonotonicClockRegressed, calculateWeek(std.testing.allocator, zone, &sessions, live, .{ .monotonic_ns = 9, .utc_ns = now.utc_ns }));
+    const empty = try calculateWeek(std.testing.allocator, zone, &.{}, .{}, now);
+    defer std.testing.allocator.free(empty);
+    try std.testing.expectEqual(@as(usize, 0), empty.len);
+    try std.testing.expectError(error.TimestampOutOfRange, calculateWeek(std.testing.allocator, zone, &.{}, .{}, .{ .monotonic_ns = 0, .utc_ns = std.math.maxInt(i128) }));
+}
+
+test "weekly DST shares use calendar boundaries and include live Monday crossings" {
+    var zone = try tz.Zone.init("America/Los_Angeles");
+    defer zone.deinit();
+    for ([_]i64{ 1710097200, 1730660400 }) |at| {
+        const week = try zone.weekAt(at);
+        const seconds: u64 = @intCast(week.end_utc_seconds - week.start_utc_seconds);
+        try std.testing.expectEqual(seconds, share(fixture(work, week.start_utc_seconds - 3600, week.end_utc_seconds + 3600, seconds + 7200), week));
+        const live: timer.Timer = .{ .running = .{ .activity = work, .start = .{ .monotonic_ns = 0, .utc_ns = @as(i128, week.end_utc_seconds - 1) * ns_per_second } } };
+        const result = try calculateWeek(std.testing.allocator, zone, &.{}, live, .{ .monotonic_ns = 10, .utc_ns = @as(i128, week.end_utc_seconds + 2) * ns_per_second });
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqual(@as(u128, 7), result[0].duration_ns);
+    }
 }
 
 test "empty history and invalid query dates" {

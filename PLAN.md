@@ -183,3 +183,20 @@ Approved defaults:
 Next, propose the first small implementation step for approval and
 surface platform/API problems before broadening scope. Any delegated task must use `gpt-6-luna` and have narrow
 file ownership and explicit acceptance checks (see `AGENTS.md`).
+
+## 6. Approved extension: current-week totals
+
+The user approved a This week column beside Today, for a fixed Monday–Sunday
+calendar week in the configured display zone. Include completed and live measured
+time by stable activity ID, including removed activities. Reuse daily attribution
+rules and HH:MM:SS display; calculate real calendar boundaries across DST rather
+than assuming 168 hours. Hide the week column on narrow screens while preserving
+controls and menu access. Refresh on transitions, live seconds, and local-day/week
+rollover without introducing idle redraws or periodic writes.
+
+Acceptance: deterministic tests for Monday boundaries, Sunday, year rollover,
+DST, zone differences, renames/removal, live sessions, rounding, and clock jumps;
+PTY checks for weekly display, restart, live updates, and small-screen resizing.
+History format and session-level CSV exports are unchanged. No prior-week
+navigation, date filters, aggregate CSV export, or week-start configuration is
+included. This extends on-screen totals only; the other exclusions still apply.

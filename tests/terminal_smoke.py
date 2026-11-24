@@ -205,7 +205,9 @@ with tempfile.TemporaryDirectory(prefix="bad-timer-totals-") as directory:
     midnight = datetime.now(zone).replace(hour=0, minute=0, second=0, microsecond=0)
     config.write_text(json.dumps({"time_zone": zone.key, "activities": [{"id": "work", "name": "Work"}]}))
     events = []
-    for session_id, date, name in ((1, midnight, "Removed"), (2, midnight - timedelta(days=1), "Yesterday")):
+    monday = midnight - timedelta(days=midnight.weekday())
+    for session_id, date, name in ((1, midnight, "Removed"), (2, midnight - timedelta(days=1), "Yesterday"),
+                                   (3, monday - timedelta(days=1), "Last week")):
         activity = {"id": name.lower(), "name": name}
         start_ns = int(date.timestamp()) * 1_000_000_000
         events.extend([
@@ -220,19 +222,28 @@ with tempfile.TemporaryDirectory(prefix="bad-timer-totals-") as directory:
         try:
             screen = receive(master, b"\x1b[?7h")
             assert b"bad-timer | Pacific/Kiritimati" in screen
-            assert b"00:00:07  Removed" in screen and b"Yesterday" not in screen
+            assert b"00:00:07  00:00:07  Removed" in screen and b"Last week" not in screen
+            assert b"This week" in screen
+            if midnight.weekday() == 0:
+                assert b"Yesterday" not in screen
+            else:
+                assert b"00:00:00  00:00:07  Yesterday" in screen
             assert b"Last key" not in screen and b"columns x" not in screen
             assert b"Key  Today" in screen
             if not restart:
                 before = history.read_bytes()
                 os.write(master, b"1")
-                running = receive(master, b"> 1  00:00:01  Work")
-                if b"\x1b[?7h" not in running[running.index(b"> 1  00:00:01  Work"):]:
+                running = receive(master, b"> 1  00:00:01  00:00:01  Work")
+                if b"\x1b[?7h" not in running[running.index(b"> 1  00:00:01  00:00:01  Work"):]:
                     receive(master, b"\x1b[?7h")
                 os.write(master, b"1")
                 stopped = receive(master, b"\x1b[?7h")
                 assert b"Stopped" in stopped
                 assert history.read_bytes().startswith(before)
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 12, 40, 0, 0))
+                process.send_signal(signal.SIGWINCH)
+                narrow = receive_frame(master, b"week: enlarge")
+                assert b"This week" not in narrow and b"00:00:07  Removed" in narrow
                 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 3, 20, 0, 0))
                 process.send_signal(signal.SIGWINCH)
                 small = receive(master, b"\x1b[?7h")
@@ -639,7 +650,7 @@ for exit_key in (b"q", b"\x03", signal.SIGTERM):
     tracked.write_bytes(b"")
     process, master, slave, original = launch(args=("--config", str(controls), "--history", str(tracked)))
     try:
-        receive(master, b"  2  00:00:00  Rest")
+        receive(master, b"  2  00:00:00  00:00:00  Rest")
         for key, marker in ((b"1", b"Active: Work"), (b"2", b"Active: Rest"),
                             (b"2", b"Stopped"), (b"1", b"Active: Work")):
             os.write(master, key)
@@ -686,8 +697,8 @@ menu_history = Path(HOME.name) / "menu.jsonl"
 process, master, slave, original = launch(args=("--config", str(menu_config), "--history", str(menu_history)))
 try:
     screen = receive(master, b"\x1b[?7h")
-    assert b"  9  00:00:00  Activity 9" in screen
-    assert b"  -  00:00:00  Activity 10" in screen
+    assert b"  9  00:00:00  00:00:00  Activity 9" in screen
+    assert b"  -  00:00:00  00:00:00  Activity 10" in screen
     os.write(master, b"1")
     receive(master, b"Active: Activity 1")
     saved = menu_history.read_bytes()
