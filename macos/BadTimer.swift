@@ -122,6 +122,23 @@ struct TotalsSnapshot: Decodable, Equatable {
 
 struct TimerView: View {
     @ObservedObject var model: TimerModel
+
+    private func activityRow(_ row: TotalsSnapshot.Row) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top) {
+                Text(row.name + (row.index == nil ? " (removed)" : ""))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let index = row.index {
+                    Text(model.running == index ? "Stop" : "Start").fixedSize()
+                }
+            }
+            Text("Today \(row.today) · Week \(row.week)")
+                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }.contentShape(Rectangle())
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(model.running < 0 ? "Stopped" : "Running: \(model.names[model.running])")
@@ -136,25 +153,22 @@ struct TimerView: View {
                     if let totals = model.totals {
                         ForEach(totals.rows.indices, id: \.self) { position in
                             let row = totals.rows[position]
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack(alignment: .top) {
-                                    Text(row.name + (row.index == nil ? " (removed)" : ""))
-                                        .fixedSize(horizontal: false, vertical: true)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                    if let index = row.index {
-                                        Button(model.running == index ? "Stop" : "Start") { model.select(index) }
-                                            .disabled(model.blocked).fixedSize()
-                                    }
-                                }
-                                Text("Today \(row.today) · Week \(row.week)")
-                                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
+                            if let index = row.index {
+                                Button { model.select(index) } label: { activityRow(row) }
+                                    .buttonStyle(.plain)
+                                    .disabled(model.blocked)
+                            } else {
+                                activityRow(row)
                             }
                         }
                     } else {
                         // A display failure must not hide the timer controls.
                         ForEach(model.names.indices, id: \.self) { index in
-                            Button(model.names[index]) { model.select(index) }.disabled(model.blocked)
+                            Button { model.select(index) } label: {
+                                Text(model.names[index])
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                            }.buttonStyle(.plain).disabled(model.blocked)
                         }
                     }
                 }

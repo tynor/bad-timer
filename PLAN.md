@@ -314,4 +314,10 @@ with two-line rows: wrapping activity name and existing control above Today/Week
 values. Window width drops from 620 to 380 points, with 16-point padding. Removed
 activities remain read-only; totals and persistence paths are unchanged. App build
 passes; compact layout still needs manual visual verification.
+A further approved interaction adjustment makes each configured activity's entire
+row a single plain button (name, totals, and blank space), using the existing
+start/stop/switch action. Fallback controls also fill the row; removed activities
+remain read-only and blocked controls remain disabled. App build passes with
+macOS deployment-version linker warnings; actual click behavior remains a manual
+check.
 Stop for review before the next scope extension.
