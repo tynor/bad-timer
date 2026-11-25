@@ -290,3 +290,28 @@ stop, restart replay, lock contention, invalid selection, and unchanged unfinish
 history on refusal. Existing Zig unit and terminal PTY checks pass. Interactive
 GUI behavior and native quit/save-failure dialogs remain manual checks, not claimed
 verified. Stop for review before further native functionality.
+
+## 12. Approved extension: native Today/This week totals
+
+User approved Today and This week HH:MM:SS columns next to native activity
+controls. Reuse the existing saved-session-zone daily/weekly attribution; show
+startup display zone as `Dates:`. Include live time, use current names for
+configured stable IDs, and show removed IDs with recorded time as read-only rows,
+including week-only time. No historical browsing or history writes for display.
+
+`src/native_totals.zig` builds JSON rows for the C bridge; Swift only decodes and
+displays them. Refresh after transitions, on live elapsed seconds, and on display
+day changes (including Monday); stopped idle reads reuse the snapshot. Display
+errors retain an explicitly stale snapshot without blocking timer saving.
+
+Acceptance passed: unit checks for live/completed time, renamed IDs, removed
+week-only rows and Monday rollover; bridge checks for completed rows, escaping,
+read-only history content/mtime, idle snapshot reuse, and live refresh calls.
+Existing saved-zone/DST attribution tests and Zig/PTY suites pass; both apps build.
+Interactive native layout and real-time midnight rollover remain manual checks.
+A subsequent approved layout-only adjustment replaces fixed-width totals columns
+with two-line rows: wrapping activity name and existing control above Today/Week
+values. Window width drops from 620 to 380 points, with 16-point padding. Removed
+activities remain read-only; totals and persistence paths are unchanged. App build
+passes; compact layout still needs manual visual verification.
+Stop for review before the next scope extension.

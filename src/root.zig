@@ -10,6 +10,7 @@ pub const csv = @import("export.zig");
 pub const totals = @import("totals.zig");
 pub const summaries = @import("summaries.zig");
 pub const transition = @import("transition.zig").transition;
+pub const native_totals = @import("native_totals.zig");
 
 test {
     _ = time_zone;
@@ -21,6 +22,7 @@ test {
     _ = csv;
     _ = totals;
     _ = summaries;
+    _ = native_totals;
 }
 
 /// Strings are borrowed and must remain valid and unchanged while used by a timer or session.

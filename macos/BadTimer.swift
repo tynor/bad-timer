@@ -1,12 +1,25 @@
 import SwiftUI
 import AppKit
 
+struct TotalsSnapshot: Decodable, Equatable {
+    struct Row: Decodable, Equatable {
+        let name: String
+        let index: Int?
+        let today: String
+        let week: String
+    }
+    let zone: String
+    let rows: [Row]
+}
+
 @MainActor final class TimerModel: ObservableObject {
     @Published var names: [String] = []
     @Published var running = -1
     @Published var seconds: UInt64 = 0
     @Published var message = ""
     @Published var blocked = false
+    @Published var totals: TotalsSnapshot?
+    @Published var totalsError = ""
     private var opened = false
     private var refresh: Timer?
 
@@ -29,6 +42,7 @@ import AppKit
             _ = bt_name(index, &bytes, count)
             return String(decoding: bytes.dropLast(), as: UTF8.self)
         }
+        update()
         refresh = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.update() }
         }
@@ -41,6 +55,17 @@ import AppKit
             message = "Clock failed: \(String(cString: bt_error())). Quit and recover in the TUI."
         }
         running = bt_running()
+        if let json = bt_totals() {
+            do {
+                let snapshot = try JSONDecoder().decode(TotalsSnapshot.self, from: Data(String(cString: json).utf8))
+                if totals != snapshot { totals = snapshot }
+                totalsError = ""
+            } catch {
+                totalsError = "Totals unavailable: \(error.localizedDescription)"
+            }
+        } else {
+            totalsError = "Totals unavailable: \(String(cString: bt_error()))"
+        }
     }
 
     func select(_ index: Int) {
@@ -98,30 +123,50 @@ import AppKit
 struct TimerView: View {
     @ObservedObject var model: TimerModel
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             Text(model.running < 0 ? "Stopped" : "Running: \(model.names[model.running])")
                 .font(.headline)
+                .fixedSize(horizontal: false, vertical: true)
             Text(String(format: "%02llu:%02llu:%02llu", model.seconds / 3600,
                         model.seconds / 60 % 60, model.seconds % 60))
                 .font(.system(size: 36, design: .monospaced))
+            Text("Dates: \(model.totals?.zone ?? "—")").font(.caption).foregroundStyle(.secondary)
             ScrollView {
-                VStack(spacing: 8) {
-                    ForEach(model.names.indices, id: \.self) { index in
-                        Button { model.select(index) } label: {
-                            HStack {
-                                Text(model.names[index])
-                                Spacer()
-                                Text(model.running == index ? "Stop" : "Start")
-                            }.frame(maxWidth: .infinity)
-                        }.disabled(model.blocked)
+                VStack(alignment: .leading, spacing: 12) {
+                    if let totals = model.totals {
+                        ForEach(totals.rows.indices, id: \.self) { position in
+                            let row = totals.rows[position]
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(alignment: .top) {
+                                    Text(row.name + (row.index == nil ? " (removed)" : ""))
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    if let index = row.index {
+                                        Button(model.running == index ? "Stop" : "Start") { model.select(index) }
+                                            .disabled(model.blocked).fixedSize()
+                                    }
+                                }
+                                Text("Today \(row.today) · Week \(row.week)")
+                                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    } else {
+                        // A display failure must not hide the timer controls.
+                        ForEach(model.names.indices, id: \.self) { index in
+                            Button(model.names[index]) { model.select(index) }.disabled(model.blocked)
+                        }
                     }
                 }
             }.frame(height: 240)
+            if !model.totalsError.isEmpty {
+                Text(model.totalsError + ". Displayed totals may be stale.").font(.callout)
+            }
             if !model.message.isEmpty {
                 Text(model.message).font(.callout).textSelection(.enabled)
             }
             Text("Selecting another activity switches timers. Quit saves the running session.")
                 .font(.caption).foregroundStyle(.secondary)
-        }.padding(24).frame(width: 390)
+        }.padding(16).frame(width: 380)
     }
 }

@@ -9,3 +9,5 @@ intptr_t bt_running(void);
 int bt_elapsed(uint64_t *seconds);
 int bt_select(intptr_t index); // -1 stops; selecting the running activity stops it.
 int bt_close(void);
+// Read-only JSON snapshot. NULL on failure; borrowed until next refresh/close.
+const char *bt_totals(void);

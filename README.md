@@ -11,7 +11,16 @@ open "build/Bad Timer.app"
 python3 tests/native_smoke.py
 ```
 
-The small SwiftUI window lists configured activities and live elapsed time.
+The small SwiftUI window lists configured activities, live elapsed time, and
+Today/This week totals in HH:MM:SS. The compact 380-point window uses two-line
+activity rows: wrapping name and Start/Stop control above Today/Week totals.
+`Dates:` identifies the startup display zone;
+cutoffs use each session's saved timezone, just like the TUI. Current names are
+used for configured IDs; removed activities with time today or this week appear
+as read-only rows. Totals include live time and refresh on transitions, live
+seconds, and day/week rollover. Stopped idle refreshes reuse cached rows and do
+not write history. A totals error marks retained values as potentially stale
+without blocking timer saving.
 Click to start, click the running activity to stop, or another to switch atomically.
 Normal Quit/window-close saves the running session. The app links the existing Zig
 clock, config, history, and shared durable-transition implementation; it does not
@@ -28,7 +37,7 @@ uncertain save failure, controls block retries; quit and inspect/recover history
 Force Quit/crashes leave explicit recovery for restart.
 
 This is a local, unsigned app, not an App Store/sandboxed distribution. Native
-recovery, totals/summary screens, config editing, and CSV controls are deferred;
+recovery, historical summary screens, config editing, and CSV controls are deferred;
 they remain available in the TUI. App compilation, bridge replay/locking/transitions,
 and existing unit/PTY checks were verified; interactive GUI behavior and older
 macOS deployment were not verified. The current SDK may emit deployment-version

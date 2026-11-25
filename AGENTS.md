@@ -170,7 +170,17 @@ history blocks startup for explicit TUI recovery. Same config/history and lockin
 no independent Swift persistence. `tests/native_smoke.py` checks bridge transitions,
 replay, locking, and unchanged unfinished history. Builds/unit/PTY checks pass;
 interactive GUI/quit dialogs and older macOS remain unverified. Native recovery,
-totals/summaries, exports, and distribution are deferred. Stop for review.
+historical summaries, exports, and distribution are deferred. Stop for review.
+Approved PLAN.md section 12 now adds native Today/This week columns via
+`src/native_totals.zig` and a read-only cached JSON bridge snapshot. Reuses saved-zone
+attribution, includes live time and read-only removed/week-only IDs, and labels the
+startup display zone. The approved compact layout uses a 380-point window with
+wrapping activity/control rows above Today/Week totals, replacing wide columns.
+Refreshes on transitions, live seconds, and display-day
+rollover; totals errors do not block saving. Unit/bridge checks cover identities,
+rollover, live/completed rows, escaping and unchanged history content/mtime. Both
+frontends and existing unit/PTY checks pass; native layout and real-time midnight
+remain manual checks. Stop for review.
 Read `PLAN.md` for the approved MVP and defaults. Plan approval is not blanket
 implementation approval: propose each small implementation step and its acceptance
 checks, obtain explicit approval, implement only that step, then stop for review.

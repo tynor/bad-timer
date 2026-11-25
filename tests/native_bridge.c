@@ -1,6 +1,7 @@
 // Run via native_smoke.py; all data belongs to a temporary directory.
 #include "../macos/Bridge.h"
 #include <assert.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
@@ -18,6 +19,14 @@ int main(int argc, char **argv) {
         return 0;
     }
     assert(result == 0);
+    if (!strcmp(argv[3], "totals")) {
+        const char *json = bt_totals();
+        assert(json);
+        puts(json);
+        assert(bt_totals() == json); // Idle reads reuse the snapshot.
+        assert(bt_close() == 0);
+        return 0;
+    }
     assert(bt_count() == 2);
     unsigned char name[64];
     assert(bt_name(0, name, sizeof name) == 5);
@@ -30,6 +39,11 @@ int main(int argc, char **argv) {
     assert(waitpid(child, &status, 0) == child && status == 0);
     assert(bt_select(0) == 0 && bt_running() == 0);
     assert(bt_close() == -1); // Never abandon a live session implicitly.
+    assert(bt_totals());
+    sleep(1);
+    assert(bt_totals()); // Live refresh is exercised; exact attribution is unit-tested.
+    uint64_t live_seconds;
+    assert(bt_elapsed(&live_seconds) == 0 && live_seconds >= 1);
     uint64_t seconds;
     assert(bt_elapsed(&seconds) == 0);
     assert(bt_select(1) == 0 && bt_running() == 1);
